@@ -1,0 +1,58 @@
+# Protocol access for tcl_probe.py in network mode (--url).
+# Include in the TCL device configuration under packages:
+#   tcl_protocol: !include tcl-protocol.yaml
+# YAML does not allow tabs, hence indentation with spaces.
+
+# Log every byte on the UART: ">>>" to the unit, "<<<" from the unit.
+# Frames are split at pauses of 50 ms.
+uart:
+  debug:
+    direction: BOTH
+    dummy_receiver: false
+    after:
+      timeout: 50ms
+    sequence:
+      - lambda: UARTDebug::log_hex(direction, bytes, ' ');
+
+# Send arbitrary bytes to the unit, value as hex text, spaces allowed.
+# The checksum is not added.
+text:
+  - platform: template
+    name: Raw frame
+    id: raw_frame
+    entity_category: config
+    mode: text
+    max_length: 255
+    set_action:
+      - lambda: |-
+          std::vector<uint8_t> data;
+          int high = -1;
+          for (char c : x) {
+            int v;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+            else continue;
+            if (high < 0) {
+              high = v;
+            } else {
+              data.push_back((uint8_t) ((high << 4) | v));
+              high = -1;
+            }
+          }
+          if (data.empty()) return;
+          id(${device_name}_uart).write_array(data.data(), data.size());
+          ESP_LOGI("raw_frame", "%u bytes sent", (unsigned) data.size());
+
+# Pause the cyclic status polling of tclac, so that only your own frames run during experiments.
+switch:
+  - platform: template
+    name: Status polling
+    id: status_polling
+    entity_category: config
+    optimistic: true
+    restore_mode: ALWAYS_ON
+    turn_on_action:
+      - component.resume: ${device_name}climate
+    turn_off_action:
+      - component.suspend: ${device_name}climate

@@ -1,0 +1,97 @@
+# Select "Reboot without API client" and button "Reboot" for ESPHome devices
+# running without Home Assistant.
+# Include under packages:
+#   standalone: !include standalone.yaml
+# YAML does not allow tabs, hence indentation with spaces.
+#
+# The device reboots when no client (Home Assistant, esphome logs) has been connected to the API
+# for a certain time. The select sets this time, "Never" (default) disables the reboot.
+# The choice survives reboots.
+# While reboot_hold is set (e.g. by schedule.yaml before a switching point), the reboot waits.
+# The button "Reboot" reboots the device immediately.
+# On the ESP8266, "Settings storage" shows how much of the 512-byte storage for stored settings
+# is in use; settings that no longer fit are not stored at all.
+
+esphome:
+  on_boot:
+    # disable the built-in API reboot, the interval below watches the time instead
+    priority: -100
+    then:
+      - lambda: |-
+          if (api::global_api_server != nullptr)
+            api::global_api_server->set_reboot_timeout(0);
+
+globals:
+  # hold back the reboot
+  - id: reboot_hold
+    type: bool
+    initial_value: "false"
+  # last time (millis) with a connected API client
+  - id: api_last_seen
+    type: uint32_t
+    initial_value: "0"
+
+select:
+  - platform: template
+    name: Reboot without API client
+    id: api_reboot_timeout
+    entity_category: config
+    icon: mdi:home-off-outline
+    options:
+      - "Never"
+      - "15 min"
+      - "30 min"
+      - "1 h"
+      - "3 h"
+      - "6 h"
+      - "12 h"
+      - "24 h"
+    initial_option: "Never"
+    optimistic: true
+    restore_value: true
+
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          // minutes per option, 0 = no reboot
+          static const uint32_t minutes[] = {0, 15, 30, 60, 180, 360, 720, 1440};
+          static bool told = false;
+          const uint32_t now = millis();
+          if (api::global_api_server != nullptr && api::global_api_server->is_connected()) {
+            id(api_last_seen) = now;
+            told = false;
+            return;
+          }
+          const size_t i = id(api_reboot_timeout).active_index().value_or(0);
+          if (i == 0 || i >= sizeof(minutes) / sizeof(minutes[0])) return;
+          if (now - id(api_last_seen) < minutes[i] * 60000UL) return;
+          if (id(reboot_hold)) {
+            if (!told) ESP_LOGI("standalone", "Reboot without API client waits for the next switching point");
+            told = true;
+            return;
+          }
+          ESP_LOGW("standalone", "No API client for %u min, rebooting", (unsigned) minutes[i]);
+          App.safe_reboot();
+
+text_sensor:
+  - platform: template
+    name: Settings storage
+    icon: mdi:memory
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      #if defined(USE_ESP8266) && defined(USE_ESP8266_PREFERENCES_FLASH)
+      auto *p = static_cast<esphome::esp8266::ESP8266Preferences *>(global_preferences);
+      char buf[40];
+      snprintf(buf, sizeof(buf), "%u of 128 words", (unsigned) p->current_flash_offset);
+      return std::string(buf);
+      #else
+      return std::string("n/a");
+      #endif
+
+button:
+  - platform: restart
+    name: Reboot
+    entity_category: config
+    icon: mdi:restart

@@ -1,0 +1,31 @@
+# History in RAM with growing interval (1 s at the start, up to 64 s for about 10.7 hours):
+# compressor frequency, room temperature, setpoint and power. Served as /history.json
+# (format: see history.h) and shown as a chart by ui-extras.js above the entities.
+# The history starts empty after every reboot.
+# Include under packages:
+#   history: !include history.yaml
+# Required substitutions in the device configuration:
+#   hist_climate     id of the climate component
+#   hist_freq        C++ expression: compressor frequency in Hz
+#   hist_power       C++ expression: power in W
+#   hist_power_name  label of the power chart, at most 24 characters
+# YAML does not allow tabs, hence indentation with spaces.
+
+esphome:
+  includes:
+    - history.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          history::set_power_name("${hist_power_name}");
+          web_server_base::global_web_server_base->add_handler(new history::Handler());
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          auto *c = id(${hist_climate});
+          // setpoint only while the unit is on, so the chart shows when it was off
+          const float target = c->mode == climate::CLIMATE_MODE_OFF ? NAN : c->target_temperature;
+          history::tick(${hist_freq}, c->current_temperature, target, ${hist_power}, millis());

@@ -1,0 +1,310 @@
+# Additional values from the status frames of the TCL unit, after AC-hack (github.com/adaasch/AC-hack).
+# Include in the TCL device configuration under packages:
+#   tcl_extra: !include tcl-extra.yaml
+# Decodes the bytes tclac receives anyway. tclac itself stays unchanged.
+# Required by setpoint-guidance.yaml on TCL units (sensor "Compressor frequency").
+# YAML does not allow tabs, hence indentation with spaces.
+
+substitutions:
+  # interval of the energy queries (command 0x0A) in milliseconds
+  energy_interval_ms: "300000"
+
+globals:
+  - id: tcl_rx_buf
+    type: std::vector<uint8_t>
+  - id: tcl_energy_last
+    type: uint32_t
+    initial_value: "0"
+
+# Energy query, started after a status reply.
+# The unit only answers if 0x0A arrives about 180 ms after a status reply.
+script:
+  - id: tcl_energy_request
+    mode: single
+    then:
+      - delay: 180ms
+      - uart.write:
+          id: ${device_name}_uart
+          data: [0xBB, 0x00, 0x01, 0x0A, 0x03, 0x05, 0x00, 0x00, 0xB6]
+
+# Decoding of all received bytes. The direction must stay BOTH so that this package
+# works together with tcl-protocol.yaml; sent bytes are skipped.
+uart:
+  debug:
+    direction: BOTH
+    dummy_receiver: false
+    after:
+      timeout: 50ms
+    sequence:
+      - lambda: |-
+          if (direction != uart::UART_DIRECTION_RX) return;
+          auto &buf = id(tcl_rx_buf);
+          buf.insert(buf.end(), bytes.begin(), bytes.end());
+          if (buf.size() > 512) buf.clear();
+
+          auto pub = [](sensor::Sensor *s, float v) {
+            if (std::isnan(s->state) || s->state != v) s->publish_state(v);
+          };
+          auto pub_bin = [](binary_sensor::BinarySensor *s, bool v) {
+            if (!s->has_state() || s->state != v) s->publish_state(v);
+          };
+          auto pub_text = [](text_sensor::TextSensor *s, const std::string &v) {
+            if (!s->has_state() || s->state != v) s->publish_state(v);
+          };
+          auto bcd = [](uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); };
+
+          while (true) {
+            size_t start = 0;
+            while (start < buf.size() && buf[start] != 0xBB) start++;
+            if (start > 0) buf.erase(buf.begin(), buf.begin() + start);
+            if (buf.size() < 5) break;
+            size_t total = (size_t) buf[4] + 6;
+            if (total < 8 || total > 70) {
+              buf.erase(buf.begin());
+              continue;
+            }
+            if (buf.size() < total) break;
+            uint8_t cs = 0;
+            for (size_t i = 0; i + 1 < total; i++) cs ^= buf[i];
+            if (cs != buf[total - 1]) {
+              buf.erase(buf.begin());
+              continue;
+            }
+            std::vector<uint8_t> f(buf.begin(), buf.begin() + total);
+            buf.erase(buf.begin(), buf.begin() + total);
+            // only frames from the unit to the module
+            if (f[1] != 0x01 || f[2] != 0x00) continue;
+            uint8_t cmd = f[3];
+
+            if ((cmd == 0x04 || cmd == 0x03) && total >= 61) {
+              // byte 30: temperature, byte 18 bit 5 selects between two readings
+              float t30 = (f[30] * 4 - 200) / 10.0f;
+              if (f[18] & 0x20) pub(id(tcl_temp30_b), t30);
+              else pub(id(tcl_temp30_a), t30);
+              pub(id(tcl_target_exact), (f[8] & 0x0F) + 16 + ((f[9] & 0x02) ? 0.5f : 0.0f));
+              pub(id(tcl_off_timer), (f[9] & 0x40) ? f[11] + f[12] / 60.0f : 0.0f);
+              pub(id(tcl_on_timer), (f[9] & 0x80) ? f[13] + f[14] / 60.0f : 0.0f);
+              pub_bin(id(tcl_indoor_active), f[34] != 0);
+              pub_bin(id(tcl_mute), (f[38] & 0x80) != 0);
+              // byte 39: compressor frequency in Hz, 0 = compressor stopped
+              pub(id(tcl_compressor_freq), f[39]);
+              char raw39[16];
+              snprintf(raw39, sizeof(raw39), "0x%02X = %u", f[39], f[39]);
+              pub_text(id(tcl_compressor_raw), raw39);
+              pub(id(tcl_vane_v), f[51]);
+              pub(id(tcl_vane_h), f[52]);
+
+              // complete frame and bytes without known meaning, for protocol analysis
+              static const uint8_t known[] = {0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19,
+                                              30, 33, 34, 38, 39, 51, 52};
+              std::string all, unknown;
+              char h[8];
+              for (size_t i = 0; i < total; i++) {
+                snprintf(h, sizeof(h), i ? " %02X" : "%02X", f[i]);
+                all += h;
+                if (i == total - 1 || f[i] == 0) continue;
+                bool is_known = false;
+                for (uint8_t k : known) {
+                  if (k == i) {
+                    is_known = true;
+                    break;
+                  }
+                }
+                if (is_known) continue;
+                snprintf(h, sizeof(h), unknown.empty() ? "%u:%02X" : " %u:%02X", (unsigned) i, f[i]);
+                unknown += h;
+              }
+              pub_text(id(tcl_status_frame), all);
+              pub_text(id(tcl_unknown_bytes), unknown.empty() ? std::string("-") : unknown);
+
+              // energy counter: query 0x0A must directly follow a status reply
+              if (id(tcl_energy_last) == 0 || millis() - id(tcl_energy_last) > ${energy_interval_ms}) {
+                id(tcl_energy_last) = millis();
+                if (id(tcl_energy_last) == 0) id(tcl_energy_last) = 1;
+                id(tcl_energy_request).execute();
+              }
+            } else if (cmd == 0x0A && total >= 50 && f[7] == 0x0C) {
+              double fraction = bcd(f[8]) * 10000.0 + bcd(f[21]) * 100.0 + bcd(f[20]);
+              double integer = bcd(f[11]) * 10000.0 + bcd(f[10]) * 100.0 + bcd(f[9]);
+              pub(id(tcl_energy), (float) (integer + fraction / 1e6));
+              pub(id(tcl_energy_ticks), (float) (f[22] | (f[23] << 8)));
+            }
+          }
+
+sensor:
+  # According to AC-hack byte 30 carries the outlet temperature. Byte 18 bit 5 switches between
+  # two readings; which one is which is not yet known.
+  - platform: template
+    id: tcl_temp30_a
+    name: Temperature byte 30 A
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
+    id: tcl_temp30_b
+    name: Temperature byte 30 B
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
+    id: tcl_target_exact
+    name: Target temperature exact
+    unit_of_measurement: °C
+    device_class: temperature
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
+    id: tcl_off_timer
+    name: Off timer
+    unit_of_measurement: h
+    icon: mdi:timer-off-outline
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
+    id: tcl_on_timer
+    name: On timer
+    unit_of_measurement: h
+    icon: mdi:timer-outline
+    accuracy_decimals: 1
+    update_interval: never
+  # counts only the consumption of the compressor / outdoor unit
+  - platform: template
+    id: tcl_energy
+    name: Energy
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+    update_interval: never
+  # rises when the compressor starts and falls as the room approaches the target temperature
+  - platform: template
+    id: tcl_compressor_freq
+    name: Compressor frequency
+    unit_of_measurement: Hz
+    icon: mdi:sine-wave
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: tcl_energy_ticks
+    name: Energy ticks
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: tcl_vane_v
+    name: Vertical vane raw
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: tcl_vane_h
+    name: Horizontal vane raw
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: never
+
+  # Estimated electrical power of the whole unit from the compressor frequency:
+  # 0 Hz -> "Power idle", otherwise "Power offset" + "Power per Hz" × frequency.
+  # Measured on the Euromate 482255 (identical to TCL TAC-09CHSD/XA71I) in heating mode with fan
+  # auto; single values deviate by about ±15 % depending on temperatures, averages over a day are
+  # more accurate.
+  - platform: template
+    id: tcl_est_power
+    name: Estimated power
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      const float f = id(tcl_compressor_freq).state;
+      if (std::isnan(f)) return NAN;
+      const float idle = id(tcl_power_idle).state;
+      if (f <= 0) return idle;
+      return std::max(idle, id(tcl_power_offset).state + id(tcl_power_per_hz).state * f);
+  # energy since the last boot, from the estimated power
+  - platform: integration
+    id: tcl_est_energy
+    name: Estimated energy
+    sensor: tcl_est_power
+    time_unit: h
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+    restore: false
+    filters:
+      - multiply: 0.001
+
+number:
+  - platform: template
+    id: tcl_power_per_hz
+    name: Power per Hz
+    icon: mdi:flash
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 50
+    step: 0.1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 18.3
+  - platform: template
+    id: tcl_power_offset
+    name: Power offset
+    icon: mdi:flash
+    entity_category: config
+    unit_of_measurement: W
+    min_value: -500
+    max_value: 500
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: -50
+  - platform: template
+    id: tcl_power_idle
+    name: Power idle
+    icon: mdi:flash-outline
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 200
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 29
+
+binary_sensor:
+  - platform: template
+    id: tcl_indoor_active
+    name: Indoor unit active
+  - platform: template
+    id: tcl_mute
+    name: Mute
+
+text_sensor:
+  # byte 39 as hex and decimal, to compare with the remote control or a power meter
+  - platform: template
+    id: tcl_compressor_raw
+    name: Compressor byte 39
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    id: tcl_status_frame
+    name: Status frame
+    entity_category: diagnostic
+    update_interval: never
+  # position:value of all non-zero bytes without known meaning
+  - platform: template
+    id: tcl_unknown_bytes
+    name: Unknown status bytes
+    entity_category: diagnostic
+    update_interval: never

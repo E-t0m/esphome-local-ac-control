@@ -1,0 +1,342 @@
+# Schedules as a text field, time via NTP. Format and rules: see schedule.h.
+# Include under packages, together with standalone.yaml (postpones the reboot without API client):
+#   schedule: !include schedule.yaml
+# Required substitutions in the device configuration:
+#   sched_climate     id of the climate component
+#   sched_fan         id of the fan speed select (its options are the fan words)
+#   sched_vane_v      id of the select for the fixed vertical vane position
+#   sched_vane_h      id of the select for the fixed horizontal vane position
+#   sched_vane_delay  wait after switching on before the vanes are moved
+# Optional substitutions (defaults below): ntp_server, timezone
+# In both vane selects index 0 is "Last position", 1–5 are the fixed positions.
+#
+# Behaviour:
+# - Each rule switches once at the set minute on every selected weekday.
+#   If several rules switch at the same minute, the last one in the text wins.
+# - After a reboot, the last switching point of the past 15 minutes is caught up,
+#   unless it was already executed before the reboot.
+# - If a switching point is due within the next 5 minutes, the reboot without API client
+#   (standalone.yaml) waits until it has been executed.
+# - The rules are stored packed (at most 10), not as text, because the settings storage of the
+#   ESP8266 is only 512 bytes. After a reboot the text field shows them in the same format;
+#   invalid rules are not stored.
+# YAML does not allow tabs, hence indentation with spaces.
+
+substitutions:
+  ntp_server: pool.ntp.org
+  timezone: Europe/Berlin
+
+esphome:
+  includes:
+    - schedule.h
+  on_boot:
+    # rebuild the text from the stored rules after boot
+    priority: -100
+    then:
+      - script.execute: sched_load
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: ${timezone}
+    servers:
+      - ${ntp_server}
+
+globals:
+  # last used mode (climate::ClimateMode), -1 = never switched on
+  - id: sched_last_mode
+    type: int
+    restore_value: true
+    initial_value: "-1"
+  # the rules, packed by schedule::pack()
+  - id: sched_store
+    type: uint32_t[20]
+    restore_value: true
+    initial_value: "{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}"
+  # stored rules loaded after boot; until then the text field is not parsed
+  - id: sched_loaded
+    type: bool
+    initial_value: "false"
+  # last executed switching point as minute since 1970 (UTC), 0 = none
+  - id: sched_done
+    type: uint32_t
+    restore_value: true
+    initial_value: "0"
+  # text parsed after boot
+  - id: sched_parsed
+    type: bool
+    initial_value: "false"
+  # first check after boot (with catch-up) done
+  - id: sched_started
+    type: bool
+    initial_value: "false"
+
+web_server:
+  sorting_groups:
+    - id: sched_group
+      name: Schedules
+      sorting_weight: 10
+
+switch:
+  - platform: template
+    name: Schedules
+    id: sched_master
+    icon: mdi:calendar-clock
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    web_server:
+      sorting_group_id: sched_group
+      sorting_weight: 1
+
+text:
+  - platform: template
+    name: Schedule
+    id: sched_text
+    icon: mdi:calendar-edit
+    mode: text
+    max_length: 255
+    optimistic: true
+    # not stored as text, see sched_store
+    initial_value: ""
+    web_server:
+      sorting_group_id: sched_group
+      sorting_weight: 2
+    on_value:
+      - script.execute: sched_parse
+
+text_sensor:
+  - platform: template
+    name: Schedule check
+    id: sched_check
+    icon: mdi:check-circle-outline
+    update_interval: never
+    web_server:
+      sorting_group_id: sched_group
+      sorting_weight: 3
+  # short format guide, with the fan words of this device
+  - platform: template
+    name: Schedule syntax
+    id: sched_syntax
+    icon: mdi:help-circle-outline
+    update_interval: never
+    web_server:
+      sorting_group_id: sched_group
+      sorting_weight: 5
+  - platform: template
+    name: Next switching
+    id: sched_next_text
+    icon: mdi:clock-outline
+    update_interval: 15s
+    web_server:
+      sorting_group_id: sched_group
+      sorting_weight: 4
+    lambda: |-
+      if (!id(sched_master).state) return std::string("Schedules off");
+      auto now = id(sntp_time).now();
+      if (!now.is_valid()) return std::string("No time");
+      int wd = schedule::weekday(now.day_of_week);
+      const schedule::Rule *next = nullptr;
+      int delta = schedule::minutes_to_next(schedule::rules(), wd, now.hour * 60 + now.minute, &next);
+      if (delta < 0) return std::string("None");
+      int day = (wd + (now.hour * 60 + now.minute + delta) / 1440) % 7;
+      return schedule::text(*next, day);
+
+interval:
+  # remember the mode that "on" switches on with
+  - interval: 10s
+    then:
+      - lambda: |-
+          auto mode = id(${sched_climate}).mode;
+          if (mode != climate::CLIMATE_MODE_OFF && (int) mode != id(sched_last_mode))
+            id(sched_last_mode) = (int) mode;
+  # check and execute switching points
+  - interval: 10s
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          if (!now.is_valid() || !id(sched_parsed)) return;
+          // right after boot the climate component may not have read the unit yet; a command now
+          // would send its default state. The catch-up window covers this wait.
+          if (millis() < 30000) return;
+          const auto &rules = schedule::rules();
+          const bool master = id(sched_master).state;
+          const uint32_t now_min = now.timestamp / 60;
+          const int wd = schedule::weekday(now.day_of_week);
+          const int minute = now.hour * 60 + now.minute;
+
+          // hold back the reboot without API client while a switching point is due
+          const int delta = schedule::minutes_to_next(rules, wd, minute, nullptr);
+          const bool pending = schedule::match(rules, wd, minute) != nullptr && now_min > id(sched_done);
+          id(reboot_hold) = master && (pending || (delta >= 0 && delta <= 5));
+
+          // after boot look back 15 minutes, afterwards the current and the previous minute
+          const int window = id(sched_started) ? 1 : 15;
+          id(sched_started) = true;
+          if (!master) return;
+          for (int k = 0; k <= window; k++) {
+            const uint32_t m = now_min - k;
+            if (m <= id(sched_done)) break;
+            auto t = ESPTime::from_epoch_local((time_t) m * 60);
+            const schedule::Rule *r = schedule::match(rules, schedule::weekday(t.day_of_week), t.hour * 60 + t.minute);
+            if (r == nullptr) continue;
+            id(sched_done) = m;
+            ESP_LOGI("schedule", "Switching point %s%s", schedule::text(*r, schedule::weekday(t.day_of_week)).c_str(),
+                     k > 1 ? " (caught up)" : "");
+            id(sched_run).execute((int) r->mode, r->temp, (int) r->fan, (int) r->v, (int) r->h);
+            id(sched_save).execute();
+            break;
+          }
+
+script:
+  # after boot: stored rules -> text field (which then parses it); without rules a template
+  # without weekdays, which never switches until days are set to x
+  - id: sched_load
+    then:
+      - lambda: |-
+          std::vector<std::string> fans;
+          for (const auto &o : id(${sched_fan}).traits.get_options())
+            fans.push_back(schedule::lower(std::string(o)));
+          std::vector<schedule::Rule> stored;
+          schedule::unpack(id(sched_store), stored);
+          std::string text = stored.empty() ? std::string("_______ 6:30 22 heat auto; _______ 8:00 off")
+                                            : schedule::format(stored, fans);
+          id(sched_loaded) = true;
+          id(sched_text).make_call().set_value(text).perform();
+
+  # parse the text and store the rules; the fan words are the options of the device's fan speed select
+  - id: sched_parse
+    then:
+      - lambda: |-
+          if (!id(sched_loaded)) return;
+          // display with the names of the selects, e.g.
+          // "Mon 06:30 · Heat · 22 °C · Fan speed 3 · Vertical Upper half · Horizontal Right half"
+          schedule::describer() = [](const schedule::Rule &r, int day) -> std::string {
+            auto option = [](select::Select *s, int i) -> std::string {
+              const auto &o = s->traits.get_options();
+              return (i >= 0 && (size_t) i < o.size()) ? std::string(o[i]) : std::string("?");
+            };
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%s %02d:%02d", schedule::DAY_LABELS[day], r.minute / 60, r.minute % 60);
+            std::string s = buf;
+            if (r.mode == schedule::SCH_OFF) return s + " · Off";
+            if (r.mode == schedule::SCH_KEEP) {
+              s += " · Mode unchanged";
+            } else if (r.mode == schedule::SCH_LAST) {
+              const char *last = "Auto";
+              switch (id(sched_last_mode)) {
+                case climate::CLIMATE_MODE_HEAT: last = "Heat"; break;
+                case climate::CLIMATE_MODE_COOL: last = "Cool"; break;
+                case climate::CLIMATE_MODE_DRY: last = "Dry"; break;
+                case climate::CLIMATE_MODE_FAN_ONLY: last = "Fan only"; break;
+                default: break;
+              }
+              s += std::string(" · Last mode (") + last + ")";
+            } else {
+              s += std::string(" · ") + schedule::MODE_LABELS[r.mode];
+            }
+            if (!std::isnan(r.temp)) {
+              std::snprintf(buf, sizeof(buf), " · %g °C", r.temp);
+              s += buf;
+            }
+            if (r.fan >= 0) s += " · Fan speed " + option(id(${sched_fan}), r.fan);
+            if (r.v > 0) s += " · Vertical " + option(id(${sched_vane_v}), r.v);
+            if (r.h > 0) s += " · Horizontal " + option(id(${sched_vane_h}), r.h);
+            return s;
+          };
+
+          std::vector<std::string> fans;
+          std::string fan_words;
+          for (const auto &o : id(${sched_fan}).traits.get_options()) {
+            fans.push_back(schedule::lower(std::string(o)));
+            fan_words += (fan_words.empty() ? "" : " ") + fans.back();
+          }
+          id(sched_syntax).publish_state(
+              "MoTuWeThFrSaSu as x/_, H:MM, [°C], off|on|auto|heat|cool|dry|fan|keep, [fan: " + fan_words +
+              "], [v1-v5 up-down], [h1-h5 left-right]; next rule. Example: xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off");
+          std::string error;
+          schedule::parse(std::string(id(sched_text).state.c_str()), fans, schedule::rules(), error);
+          schedule::pack(schedule::rules(), id(sched_store));
+          std::string status = error.empty() ? "OK, " + std::to_string(schedule::rules().size()) + " rules" : error;
+          ESP_LOGI("schedule", "%s", status.c_str());
+          id(sched_check).publish_state(status);
+          id(sched_parsed) = true;
+          id(sched_next_text).update();
+
+  # store the executed switching point right away, not only after flash_write_interval
+  - id: sched_save
+    mode: restart
+    then:
+      - delay: 3s
+      - lambda: global_preferences->sync();
+
+  # execute a switching point: mode (schedule::Mode), temperature (NAN = unchanged),
+  # fan index (-1 = unchanged), vanes 1–5 (0 = unchanged)
+  - id: sched_run
+    mode: queued
+    parameters:
+      mode: int
+      temp: float
+      fan: int
+      v: int
+      h: int
+    then:
+      - lambda: |-
+          auto call = id(${sched_climate}).make_call();
+          if (mode == schedule::SCH_KEEP) {
+            // mode and on/off stay, only set the temperature
+            if (!std::isnan(temp) && !schedule::hooked(temp)) {
+              call.set_target_temperature(temp);
+              call.perform();
+            }
+            return;
+          }
+          climate::ClimateMode m;
+          switch (mode) {
+            case schedule::SCH_OFF: m = climate::CLIMATE_MODE_OFF; break;
+            case schedule::SCH_HEAT: m = climate::CLIMATE_MODE_HEAT; break;
+            case schedule::SCH_COOL: m = climate::CLIMATE_MODE_COOL; break;
+            case schedule::SCH_DRY: m = climate::CLIMATE_MODE_DRY; break;
+            case schedule::SCH_FAN: m = climate::CLIMATE_MODE_FAN_ONLY; break;
+            case schedule::SCH_LAST:
+              if (id(sched_last_mode) >= 0) {
+                m = (climate::ClimateMode) id(sched_last_mode);
+                break;
+              }
+              // never switched on yet: auto
+              [[fallthrough]];
+            default:
+              m = id(${sched_climate}).get_traits().supports_mode(climate::CLIMATE_MODE_AUTO)
+                      ? climate::CLIMATE_MODE_AUTO
+                      : climate::CLIMATE_MODE_HEAT_COOL;
+          }
+          call.set_mode(m);
+          if (m != climate::CLIMATE_MODE_OFF && !std::isnan(temp) && !schedule::hooked(temp))
+            call.set_target_temperature(temp);
+          call.perform();
+      - if:
+          condition:
+            # with keep only while the unit is running
+            lambda: |-
+              return mode != schedule::SCH_OFF && fan >= 0 &&
+                     (mode != schedule::SCH_KEEP || id(${sched_climate}).mode != climate::CLIMATE_MODE_OFF);
+          then:
+            - delay: 1s
+            - lambda: id(${sched_fan}).make_call().set_index(fan).perform();
+      - if:
+          condition:
+            lambda: |-
+              return mode != schedule::SCH_OFF && (v > 0 || h > 0) &&
+                     (mode != schedule::SCH_KEEP || id(${sched_climate}).mode != climate::CLIMATE_MODE_OFF);
+          then:
+            - delay: ${sched_vane_delay}
+            - if:
+                condition:
+                  lambda: return v > 0;
+                then:
+                  - lambda: id(${sched_vane_v}).make_call().set_index(v).perform();
+                  - delay: 1500ms
+            - if:
+                condition:
+                  lambda: return h > 0;
+                then:
+                  - lambda: id(${sched_vane_h}).make_call().set_index(h).perform();

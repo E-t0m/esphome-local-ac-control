@@ -1,0 +1,138 @@
+# ESPHome configuration for a TCL air conditioner (tested: TCL TAC-09CHSD/XA71I and the identical
+# Euromate 482255) with the Tuya module TYWE1S (ESP8266EX, 2 MB) on the carrier board TYJW2.
+# device_name must not contain hyphens, tclac uses it in component ids.
+# YAML does not allow tabs, hence indentation with spaces.
+
+substitutions:
+  device_name: klimatcl
+  humanly_name: Klima TCL
+  wifi_ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  recovery_pass: !secret tcl_recovery_pass
+  ota_pass: !secret tcl_ota_pass
+  api_key: !secret tcl_api_key
+  # the carrier board TYJW2 routes the connector to the alternative UART pins of the ESP8266
+  uart_rx: GPIO13
+  uart_tx: GPIO15
+  # schedules (schedule.yaml): climate component and vane selects from tclac, time from the router
+  sched_climate: ${device_name}climate
+  sched_fan: fan_speed
+  sched_vane_v: vfixing
+  sched_vane_h: hfixing
+  sched_vane_delay: 5s
+  ntp_server: fritz.box
+  # setpoint guidance (setpoint-guidance.yaml): compressor frequency from tcl-extra.yaml,
+  # setpoint in whole degrees
+  guide_climate: ${device_name}climate
+  guide_running: "id(tcl_compressor_freq).state > 0"
+  guide_stopped: "id(tcl_compressor_freq).state == 0"
+  guide_step: "1.0"
+  # history (history.yaml): compressor frequency and estimated power from tcl-extra.yaml
+  hist_climate: ${device_name}climate
+  hist_freq: "id(tcl_compressor_freq).state"
+  hist_power: "id(tcl_est_power).state"
+  hist_power_name: Estimated power
+
+# Source: fork with the fixes from the pull request.
+# Once they are merged into tclac: switch packages to I-am-nightingale/tclac with ref master
+# and remove the external_components block.
+packages:
+  remote_package:
+    url: https://github.com/E-t0m/tclac.git
+    ref: localizable-options-and-log-typos
+    files:
+      - packages/core.yaml
+      - packages/lang_en.yaml
+    refresh: 1d
+  # raw frame access for tcl_probe.py --url, uncomment when needed
+  # tcl_protocol: !include tcl-protocol.yaml
+  # additional values after AC-hack: timers, compressor, energy, unknown bytes
+  tcl_extra: !include tcl-extra.yaml
+  # select "Reboot without API client" and button "Reboot"
+  standalone: !include standalone.yaml
+  # schedules as a text field
+  schedule: !include schedule.yaml
+  # self-learning setpoint guidance for heating
+  setpoint_guidance: !include setpoint-guidance.yaml
+  # last 10 hours as a chart in the web interface
+  history: !include history.yaml
+
+# component from the same branch, overrides the source from core.yaml
+external_components:
+  - source:
+      url: https://github.com/E-t0m/tclac.git
+      type: git
+      ref: localizable-options-and-log-typos
+    components: [ tclac ]
+    refresh: 1d
+
+esp8266:
+  board: esp_wroom_02
+  # keep settings (schedules, selects) across power cuts
+  restore_from_flash: true
+
+# Flash layout with only 64 KB file system (unused by ESPHome): this leaves almost 1 MB for
+# OTA updates next to the running firmware instead of about 400 KB.
+esphome:
+  platformio_options:
+    board_build.ldscript: eagle.flash.2m64.ld
+
+web_server:
+  port: 80
+  version: 3
+  # interface including icons from the firmware instead of the internet (built by build-ui.py),
+  # log column collapsed by default (log icon at the top right), column width adjustable
+  js_url: ""
+  js_include: esphome-ui.js
+  auth:
+    username: admin
+    password: !secret tcl_web_pass
+
+ota:
+  - platform: web_server
+
+
+
+select:
+  # fan speed as a separate select, because the climate card of the web interface
+  # shows no fan modes. Mapping to tclac: speed 1–5 = LOW, MIDDLE, MEDIUM,
+  # HIGH, FOCUS; Mute = QUIET; Turbo = DIFFUSE.
+  - platform: template
+    name: Fan speed
+    id: fan_speed
+    options:
+      - "Auto"
+      - "1"
+      - "2"
+      - "3"
+      - "4"
+      - "5"
+      - "Mute"
+      - "Turbo"
+    update_interval: 2s
+    lambda: |-
+      auto fm = id(${device_name}climate).fan_mode;
+      if (!fm.has_value()) return {};
+      switch (*fm) {
+        case climate::CLIMATE_FAN_AUTO: return std::string("Auto");
+        case climate::CLIMATE_FAN_LOW: return std::string("1");
+        case climate::CLIMATE_FAN_MIDDLE: return std::string("2");
+        case climate::CLIMATE_FAN_MEDIUM: return std::string("3");
+        case climate::CLIMATE_FAN_HIGH: return std::string("4");
+        case climate::CLIMATE_FAN_FOCUS: return std::string("5");
+        case climate::CLIMATE_FAN_QUIET: return std::string("Mute");
+        case climate::CLIMATE_FAN_DIFFUSE: return std::string("Turbo");
+        default: return {};
+      }
+    set_action:
+      - lambda: |-
+          auto call = id(${device_name}climate).make_call();
+          if (x == "Auto") call.set_fan_mode(climate::CLIMATE_FAN_AUTO);
+          else if (x == "1") call.set_fan_mode(climate::CLIMATE_FAN_LOW);
+          else if (x == "2") call.set_fan_mode(climate::CLIMATE_FAN_MIDDLE);
+          else if (x == "3") call.set_fan_mode(climate::CLIMATE_FAN_MEDIUM);
+          else if (x == "4") call.set_fan_mode(climate::CLIMATE_FAN_HIGH);
+          else if (x == "5") call.set_fan_mode(climate::CLIMATE_FAN_FOCUS);
+          else if (x == "Mute") call.set_fan_mode(climate::CLIMATE_FAN_QUIET);
+          else if (x == "Turbo") call.set_fan_mode(climate::CLIMATE_FAN_DIFFUSE);
+          call.perform();

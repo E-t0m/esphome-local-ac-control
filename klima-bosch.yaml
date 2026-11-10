@@ -1,0 +1,422 @@
+# ESPHome configuration for a Midea-based air conditioner, tested with the Bosch Climate 4000i,
+# with SMLIGHT SLWF-01Pro v2 (ESP8266, USB-A plug, 5 V level shifter).
+# YAML does not allow tabs, hence indentation with spaces.
+
+substitutions:
+  # schedules (schedule.yaml): climate component and vane selects; move the vanes only
+  # after louver_restore (10 s after switching on); time from the router
+  sched_climate: bosch_climate
+  sched_fan: fan_speed
+  sched_vane_v: vertical_louver
+  sched_vane_h: horizontal_louver
+  sched_vane_delay: 14s
+  ntp_server: fritz.box
+  # setpoint guidance (setpoint-guidance.yaml): the compressor runs while its frequency is above 0
+  guide_climate: bosch_climate
+  guide_running: "id(bosch_comp_freq).state > 0"
+  guide_stopped: "id(bosch_comp_freq).state == 0"
+  guide_step: "0.5"
+  # history (history.yaml): compressor frequency and estimated total power
+  hist_climate: bosch_climate
+  hist_freq: "id(bosch_comp_freq).state"
+  hist_power: "id(bosch_total_power).state"
+  hist_power_name: Total power
+
+esphome:
+  name: klima-bosch
+  friendly_name: Klima Bosch
+
+esp8266:
+  board: esp12e
+  # keep settings (vane positions, schedules) across power cuts
+  restore_from_flash: true
+
+# spare the flash: write changed values at most every 10 minutes
+preferences:
+  flash_write_interval: 10min
+
+globals:
+  - id: climate_was_on
+    type: bool
+    initial_value: "false"
+
+packages:
+  # select "Reboot without API client" and button "Reboot"
+  standalone: !include standalone.yaml
+  # schedules as a text field
+  schedule: !include schedule.yaml
+  # self-learning setpoint guidance for heating
+  setpoint_guidance: !include setpoint-guidance.yaml
+  # last 10 hours as a chart in the web interface
+  history: !include history.yaml
+
+logger:
+  baud_rate: 0
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    password: !secret bosch_recovery_pass
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret bosch_api_key
+
+ota:
+  - platform: esphome
+    password: !secret bosch_ota_pass
+
+web_server:
+  port: 80
+  version: 3
+  # interface including icons from the firmware instead of the internet (built by build-ui.py),
+  # log column collapsed by default (log icon at the top right), column width adjustable
+  js_url: ""
+  js_include: esphome-ui.js
+  auth:
+    username: admin
+    password: !secret bosch_web_pass
+
+# SLWF-01Pro v2: UART to the air conditioner on GPIO12/GPIO14
+# Midea component by juchong: like the official one, plus Midea properties (B0/B1)
+external_components:
+  - source: github://juchong/esphome-midea@main
+    components: [ midea ]
+
+uart:
+  id: midea_uart
+  tx_pin: GPIO12
+  rx_pin: GPIO14
+  baud_rate: 9600
+
+climate:
+  - platform: midea
+    id: bosch_climate
+    name: Climate
+    autoconf: true
+    # the diagnostic values (compressor, power, fan speeds, …) come from several data groups that
+    # are queried in turn, one per interval; with 2 s each group is refreshed about every 10 s
+    diagnostic_interval: 2s
+    # modes offered in any case; autoconf only adds to them, and on the 4000i its report
+    # does not always contain heating
+    supported_modes:
+      - HEAT_COOL
+      - COOL
+      - HEAT
+      - DRY
+      - FAN_ONLY
+    beeper: true
+    outdoor_temperature:
+      name: Outdoor temperature
+    compressor_frequency:
+      id: bosch_comp_freq
+      name: Compressor frequency
+    # power of the outdoor unit (C1 group 7). The energy values of group 4
+    # (power_usage, total_energy, current_energy) always stay 0 on the 4000i.
+    outdoor_unit_power:
+      id: bosch_outdoor_power
+      name: Outdoor unit power
+    # fan speeds in rpm from the C1 indoor fan group: actual and commanded speed
+    # of the indoor fan, actual speed of the outdoor fan
+    indoor_fan_speed:
+      name: Indoor fan speed
+    target_indoor_fan_speed:
+      name: Indoor fan target speed
+    outdoor_fan_speed:
+      name: Outdoor fan speed
+    humidity_setpoint:
+      name: Humidity setpoint
+    # move the vanes to the selected positions again when the unit is switched on
+    on_state:
+      - lambda: |-
+          bool on = x.mode != climate::CLIMATE_MODE_OFF;
+          if (on && !id(climate_was_on)) id(louver_restore).execute();
+          id(climate_was_on) = on;
+    # query the vane position (Midea properties 0x0009/0x000A)
+    # The unit reports the position as value 1/25/50/75/100, not as an angle. The sensors
+    # stay internal, the selects "… louver" show the position.
+    vertical_louver_angle:
+      name: Vertical louver angle
+      internal: true
+      # show the reported position in the select while a fixed position is selected there
+      on_value:
+        - lambda: |-
+            static const uint8_t values[] = {1, 25, 50, 75, 100};
+            auto active = id(vertical_louver).active_index();
+            if (!active.has_value() || *active == 0) return;
+            for (size_t i = 0; i < 5; i++) {
+              if ((int) x == values[i]) {
+                if (*active != i + 1) id(vertical_louver).publish_state(i + 1);
+                return;
+              }
+            }
+    horizontal_louver_angle:
+      name: Horizontal louver angle
+      internal: true
+      # show the reported position in the select while a fixed position is selected there
+      on_value:
+        - lambda: |-
+            static const uint8_t values[] = {1, 25, 50, 75, 100};
+            auto active = id(horizontal_louver).active_index();
+            if (!active.has_value() || *active == 0) return;
+            for (size_t i = 0; i < 5; i++) {
+              if ((int) x == values[i]) {
+                if (*active != i + 1) id(horizontal_louver).publish_state(i + 1);
+                return;
+              }
+            }
+
+# room temperature of the indoor unit as a separate sensor (value from the climate entity)
+sensor:
+  - platform: template
+    name: Room temperature
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 30s
+    lambda: |-
+      return id(bosch_climate).current_temperature;
+  # Estimated electrical power of the whole unit from the outdoor unit power reported by the unit:
+  # compressor stopped -> "Power idle", otherwise "Power offset" + "Power factor" × outdoor unit power.
+  # The reported value covers only part of the consumption (indoor unit, outdoor fan and losses are
+  # missing). Defaults measured on this unit with fan auto, within about 10 W at steady load.
+  - platform: template
+    id: bosch_total_power
+    name: Total power
+    unit_of_measurement: W
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      const float f = id(bosch_comp_freq).state;
+      const float p = id(bosch_outdoor_power).state;
+      if (std::isnan(f) || std::isnan(p)) return NAN;
+      const float idle = id(bosch_power_idle).state;
+      if (f <= 0) return idle;
+      return std::max(idle, id(bosch_power_offset).state + id(bosch_power_factor).state * p);
+  # energy since the last boot, from the total power
+  - platform: integration
+    name: Total energy
+    sensor: bosch_total_power
+    time_unit: h
+    unit_of_measurement: kWh
+    device_class: energy
+    state_class: total_increasing
+    accuracy_decimals: 3
+    restore: false
+    filters:
+      - multiply: 0.001
+
+number:
+  - platform: template
+    id: bosch_power_factor
+    name: Power factor
+    icon: mdi:flash
+    entity_category: config
+    min_value: 0.5
+    max_value: 3
+    step: 0.01
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 1.13
+  - platform: template
+    id: bosch_power_offset
+    name: Power offset
+    icon: mdi:flash
+    entity_category: config
+    unit_of_measurement: W
+    min_value: -500
+    max_value: 500
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 66
+  - platform: template
+    id: bosch_power_idle
+    name: Power idle
+    icon: mdi:flash-outline
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 0
+    max_value: 200
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 12
+
+# send the selected vane positions again after switching on.
+# The pause gives the unit time to open the vanes itself after the start.
+script:
+  - id: louver_restore
+    mode: restart
+    then:
+      - delay: 10s
+      - lambda: |-
+          auto a = id(vertical_louver).active_index();
+          if (a.has_value() && *a > 0) id(vertical_louver).make_call().set_index(*a).perform();
+      - delay: 1500ms
+      - lambda: |-
+          auto a = id(horizontal_louver).active_index();
+          if (a.has_value() && *a > 0) id(horizontal_louver).make_call().set_index(*a).perform();
+
+switch:
+  - platform: template
+    name: Beeper
+    id: beeper_switch
+    icon: mdi:volume-source
+    optimistic: true
+    turn_on_action:
+      - midea_ac.beeper_on:
+    turn_off_action:
+      - midea_ac.beeper_off:
+
+button:
+  - platform: template
+    name: Toggle display
+    on_press:
+      - midea_ac.display_toggle:
+  # move the vanes one step, like a short press of the swing button
+  - platform: template
+    name: Swing step
+    icon: mdi:arrow-oscillating
+    on_press:
+      - midea_ac.swing_step:
+
+# fan speed as a separate select, because the climate card of the web interface
+# shows no fan modes. Silent and Turbo are Midea custom fan modes
+# and only offered if the unit reports them via autoconf.
+select:
+  - platform: template
+    name: Fan speed
+    id: fan_speed
+    options:
+      - "Auto"
+      - "Low"
+      - "Medium"
+      - "High"
+      - "Silent"
+      - "Turbo"
+    update_interval: 2s
+    lambda: |-
+      auto *c = id(bosch_climate);
+      if (c->has_custom_fan_mode()) {
+        auto cm = c->get_custom_fan_mode();
+        if (cm == "Silent") return std::string("Silent");
+        if (cm == "Turbo") return std::string("Turbo");
+        return {};
+      }
+      if (!c->fan_mode.has_value()) return {};
+      switch (*c->fan_mode) {
+        case climate::CLIMATE_FAN_AUTO: return std::string("Auto");
+        case climate::CLIMATE_FAN_LOW: return std::string("Low");
+        case climate::CLIMATE_FAN_MEDIUM: return std::string("Medium");
+        case climate::CLIMATE_FAN_HIGH: return std::string("High");
+        default: return {};
+      }
+    set_action:
+      - lambda: |-
+          auto call = id(bosch_climate).make_call();
+          if (x == "Auto") call.set_fan_mode(climate::CLIMATE_FAN_AUTO);
+          else if (x == "Low") call.set_fan_mode(climate::CLIMATE_FAN_LOW);
+          else if (x == "Medium") call.set_fan_mode(climate::CLIMATE_FAN_MEDIUM);
+          else if (x == "High") call.set_fan_mode(climate::CLIMATE_FAN_HIGH);
+          else if (x == "Silent") call.set_fan_mode("Silent");
+          else if (x == "Turbo") call.set_fan_mode("Turbo");
+          call.perform();
+
+  # fix the vanes through the Midea properties 0x0009 (vertical) and 0x000A (horizontal).
+  # "Last position" fixes nothing; a selected position is stored and moved to again
+  # every time the unit is switched on. The position names match those of the TCL units.
+  # Command B0 with the values 1, 25, 50, 75, 100, plus property 0x001A (buzzer) following
+  # the switch "Beeper", as msmart does. The frame goes directly to the UART,
+  # the position reported by the unit then shows up in the select.
+  - platform: template
+    name: Vertical louver
+    id: vertical_louver
+    icon: mdi:air-filter
+    options:
+      - "Last position"
+      - "Fully up"
+      - "Upper half"
+      - "Middle"
+      - "Lower half"
+      - "Fully down"
+    optimistic: true
+    restore_value: true
+    initial_option: "Last position"
+    set_action:
+      - lambda: |-
+          // set Midea property (B0): vane angle, values as in msmart
+          static uint8_t msg_id = 0;
+          static const uint8_t values[] = {1, 25, 50, 75, 100};
+          auto index = id(vertical_louver).index_of(x);
+          if (!index.has_value() || *index > 5) return;
+          // "Last position": fix nothing, the unit leaves the vane where it is
+          if (*index == 0) return;
+          uint8_t value = values[*index - 1];
+          std::vector<uint8_t> f = {0xAA, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02,
+                                    0xB0, 0x02, 0x09, 0x00, 0x01, value,
+                                    // always send the buzzer (0x001A), otherwise the unit beeps
+                                    0x1A, 0x00, 0x01, (uint8_t) (id(beeper_switch).state ? 1 : 0), ++msg_id};
+          uint8_t crc = 0;
+          for (size_t i = 10; i < f.size(); i++) {
+            crc ^= f[i];
+            for (int k = 0; k < 8; k++) crc = (crc & 1) ? (crc >> 1) ^ 0x8C : crc >> 1;
+          }
+          f.push_back(crc);
+          f[1] = (uint8_t) f.size();
+          f[3] = f[1] ^ 0xAC;
+          uint8_t sum = 0;
+          for (size_t i = 1; i < f.size(); i++) sum += f[i];
+          f.push_back((uint8_t) -sum);
+          id(midea_uart).write_array(f.data(), f.size());
+          ESP_LOGI("louver", "Property 0x%04X = %u sent", 0x09, value);
+  - platform: template
+    name: Horizontal louver
+    id: horizontal_louver
+    icon: mdi:air-filter
+    options:
+      - "Last position"
+      - "Fully left"
+      - "Left half"
+      - "Middle"
+      - "Right half"
+      - "Fully right"
+    optimistic: true
+    restore_value: true
+    initial_option: "Last position"
+    set_action:
+      - lambda: |-
+          // set Midea property (B0): vane angle, values as in msmart
+          static uint8_t msg_id = 0;
+          static const uint8_t values[] = {1, 25, 50, 75, 100};
+          auto index = id(horizontal_louver).index_of(x);
+          if (!index.has_value() || *index > 5) return;
+          // "Last position": fix nothing, the unit leaves the vane where it is
+          if (*index == 0) return;
+          uint8_t value = values[*index - 1];
+          std::vector<uint8_t> f = {0xAA, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02,
+                                    0xB0, 0x02, 0x0A, 0x00, 0x01, value,
+                                    // always send the buzzer (0x001A), otherwise the unit beeps
+                                    0x1A, 0x00, 0x01, (uint8_t) (id(beeper_switch).state ? 1 : 0), ++msg_id};
+          uint8_t crc = 0;
+          for (size_t i = 10; i < f.size(); i++) {
+            crc ^= f[i];
+            for (int k = 0; k < 8; k++) crc = (crc & 1) ? (crc >> 1) ^ 0x8C : crc >> 1;
+          }
+          f.push_back(crc);
+          f[1] = (uint8_t) f.size();
+          f[3] = f[1] ^ 0xAC;
+          uint8_t sum = 0;
+          for (size_t i = 1; i < f.size(); i++) sum += f[i];
+          f.push_back((uint8_t) -sum);
+          id(midea_uart).write_array(f.data(), f.size());
+          ESP_LOGI("louver", "Property 0x%04X = %u sent", 0x0A, value);
