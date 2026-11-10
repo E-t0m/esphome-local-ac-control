@@ -12,7 +12,7 @@ Example configurations:
 | Configuration | Tested with | Module |
 |---|---|---|
 | `klima-tcl.yaml` | TCL TAC-09CHSD/XA71I (2.6 kW) and the identical Euromate 482255 | Tuya TYWE1S (ESP8266, 2 MB) on carrier board TYJW2 |
-| `klima-bosch.yaml` | Bosch Climate 4000i, a Midea Xtreme Save (MSAGBU) with Bosch badge | SMLIGHT SLWF-01Pro v2 |
+| `klima-bosch.yaml` | Bosch Climate 4000i (CL4000i 26 E, 2.6 kW), a Midea Xtreme Save (MSAGBU-09…) with Bosch badge | SMLIGHT SLWF-01Pro v2 |
 
 For several units of the same type, copy the example, change `device_name` (TCL) or `name` (Bosch), `humanly_name` / `friendly_name` and the secret names.
 
@@ -157,7 +157,7 @@ The Bosch Climate 4000i is built by Midea; it is the Midea Xtreme Save, model co
 | CL4000i 35 E | Xtreme Save 12000 BTU/h (MSAGBU-12…) | 3.5 kW |
 | CL4000i 53 E | Xtreme Save 18000 BTU/h (MSAGBU-18…) | 5.3 kW |
 
-`klima-bosch.yaml` is written for these units and works for other units of the Midea platform as well. The SLWF-01Pro v2 plugs into the unit with its USB-A plug and talks to it through the UART on GPIO12/GPIO14.
+`klima-bosch.yaml` is tested with the CL4000i 26 E; the other sizes and other units of the Midea platform use the same protocol. The SLWF-01Pro v2 plugs into the unit with its USB-A plug and talks to it through the UART on GPIO12/GPIO14.
 
 | Entity | Meaning |
 |---|---|
@@ -186,7 +186,7 @@ The Bosch Climate 4000i reports "Outdoor unit power", which covers only part of 
 | stopped | "Power idle" |
 | running | "Power offset" + "Power factor" × outdoor unit power |
 
-The defaults (12 W, 66 W, 1.13) were measured on this unit with fan auto and match a power meter within about 10 W at steady load. "Total energy" sums up the energy since the last boot.
+The defaults (12 W, 66 W, 1.13) were measured on the CL4000i 26 E in heating mode with fan auto and match a power meter within about 10 W at steady load. "Total energy" sums up the energy since the last boot.
 
 ## Running without Home Assistant
 

@@ -1,5 +1,5 @@
 # ESPHome configuration for a Midea-based air conditioner, tested with the Bosch Climate 4000i
-# (= Midea Xtreme Save, MSAGBU),
+# CL4000i 26 E (2.6 kW, = Midea Xtreme Save MSAGBU-09…),
 # with SMLIGHT SLWF-01Pro v2 (ESP8266, USB-A plug, 5 V level shifter).
 # YAML does not allow tabs, hence indentation with spaces.
 
@@ -183,7 +183,7 @@ sensor:
   # Estimated electrical power of the whole unit from the outdoor unit power reported by the unit:
   # compressor stopped -> "Power idle", otherwise "Power offset" + "Power factor" × outdoor unit power.
   # The reported value covers only part of the consumption (indoor unit, outdoor fan and losses are
-  # missing). Defaults measured on this unit with fan auto, within about 10 W at steady load.
+  # missing). Defaults measured on the CL4000i 26 E with fan auto, within about 10 W at steady load.
   - platform: template
     id: bosch_total_power
     name: Total power
