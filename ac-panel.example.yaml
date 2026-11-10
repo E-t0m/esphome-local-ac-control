@@ -1,0 +1,12 @@
+# Copy to ac-panel.yaml and adapt; the passwords come from secrets.yaml.
+# YAML does not allow tabs, hence indentation with spaces.
+port: 8080
+# password for the page itself (user "admin"); remove the line for a page without password
+panel_password: !secret panel_pass
+devices:
+  - name: Klima TCL
+    host: klimatcl.local
+    password: !secret tcl_web_pass
+  - name: Klima Bosch
+    host: klima-bosch.local
+    password: !secret bosch_web_pass

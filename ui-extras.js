@@ -5,7 +5,12 @@
 // - Without a connection to the device (circle at the top right not green) all controls are locked.
 // - The device name at the top reloads the page when clicked, e.g. after an update.
 // - With history.yaml on the device, a history chart is shown above the entities.
-// The browser remembers choice and widths per device.
+// - With the switch "Power" (schedule.yaml) on the device, a power button at the very top left
+//   switches the unit off, or on again with the last used mode.
+// - Every section (and the history) collapses with a click on its header.
+// - The schedule is edited in a resizable text field, one rule per line, next to the list of
+//   the rules with the next switching point in bold.
+// The browser remembers choice, widths and collapsed sections per device.
 const KEY = "esphome-log-hidden";
 const BUTTON = "log-toggle";
 
@@ -197,11 +202,86 @@ function lock() {
 	const section = table && table.closest("section");
 	if (!section) return;
 	const off = !app.connected;
+	const p = r.getElementById(POWER);
+	if (p && p.inert !== off) {
+		p.inert = off;
+		p.style.opacity = off ? "0.45" : "";
+	}
 	if (section.inert !== off) {
 		section.inert = off;
 		section.classList.toggle("offline-lock", off);
 		section.title = off ? "No connection to the device" : "";
 	}
+}
+
+// Power button at the very top left for the switch "Power" (schedule.yaml). It appears once
+// the device has reported the switch; blue = unit on. A click switches off, or on with the
+// last used mode. The state comes from the event stream of the interface.
+const POWER = "power-toggle";
+let power = null;  // { path, on } once the device has reported the switch
+let listening = false;
+// last state per entity, key "domain/Name" (e.g. "text/Schedule")
+const states = {};
+
+function base() {
+	return location.pathname.replace(/\/$/, "");
+}
+
+function post(key, action, query) {
+	const path = key.split("/").map(encodeURIComponent).join("/");
+	return fetch(`${base()}/${path}/${action}` + (query ? `?${query}` : ""), { method: "POST" });
+}
+
+function stateListen() {
+	if (listening || !window.source) return;
+	listening = true;
+	window.source.addEventListener("state", (e) => {
+		let d;
+		try {
+			d = JSON.parse(e.data);
+		} catch (x) {
+			return;
+		}
+		let key = d.name_id || d.id || "";
+		if (key === "switch-power") key = "switch/Power";
+		if (!key.includes("/")) return;
+		states[key] = d;
+		if (key === "switch/Power") {
+			power = { path: key, on: d.value === true || d.state === "ON" };
+			powerButton();
+		} else if (key === "text/Schedule" || key === "text_sensor/Schedule rules") {
+			scheduleBox();
+		}
+	});
+}
+
+function powerClick(ev) {
+	ev.preventDefault();
+	if (!power) return;
+	post(power.path, power.on ? "turn_off" : "turn_on").catch(() => {});
+}
+
+function powerButton() {
+	const r = root();
+	const header = r && r.querySelector("header");
+	if (!power || !header) return;
+	let a = r.getElementById(POWER);
+	if (!a) {
+		a = document.createElement("a");
+		a.href = "#";
+		a.id = POWER;
+		const icon = document.createElement("iconify-icon");
+		icon.setAttribute("icon", "mdi:power");
+		icon.className = "top-icon";
+		a.appendChild(icon);
+		a.addEventListener("click", powerClick);
+		// the header icons float right; this one floats left, as first element left of the logo
+		a.style.float = "left";
+		icon.style.float = "none";
+		header.prepend(a);
+	}
+	a.querySelector("iconify-icon").style.color = power.on ? "rgba(3, 169, 244, 0.9)" : "";
+	a.title = power.on ? "Switch off" : "Switch on (last mode)";
 }
 
 // device name in the header as a link to this page, so a click reloads it
@@ -384,8 +464,191 @@ function historyBox() {
 	}
 }
 
+// Collapsible sections: a click on a section header (also "OTA Update" and "Debug Log") folds
+// the section; the double click of the interface toggles the log column as before.
+const FOLD_KEY = "esphome-closed-sections";
+const FOLD_STYLE = `
+.tab-header.fold { cursor: pointer; display: flex; width: fit-content; }
+.tab-header.fold::before { content: "▾"; display: inline-block; width: 1.2em; margin-left: -0.6em; }
+.tab-header.fold.closed::before { content: "▸"; }
+.tab-header.fold.closed { border-radius: 12px; }
+.tab-header.fold.closed + .tab-container { display: none; }
+`;
+
+function folded() {
+	try {
+		return JSON.parse(localStorage.getItem(FOLD_KEY) || "[]");
+	} catch (e) {
+		return [];
+	}
+}
+
+function style(rootNode, id, css) {
+	if (rootNode.getElementById(id)) return;
+	const s = document.createElement("style");
+	s.id = id;
+	s.textContent = css;
+	rootNode.appendChild(s);
+}
+
+// the shadow roots of the interface: the page and its components (entities, log, …)
+function shadowRoots() {
+	const r = root();
+	if (!r) return [];
+	const out = [r];
+	r.querySelectorAll("*").forEach((el) => {
+		if (el.shadowRoot) out.push(el.shadowRoot);
+	});
+	return out;
+}
+
+function sections() {
+	const closed = folded();
+	for (const sr of shadowRoots()) {
+		const heads = sr.querySelectorAll(".tab-header");
+		if (!heads.length) continue;
+		style(sr, "fold-style", FOLD_STYLE);
+		heads.forEach((h) => {
+			const name = h.textContent.trim();
+			if (!h.classList.contains("fold")) {
+				h.classList.add("fold");
+				h.addEventListener("click", () => {
+					const list = folded().filter((n) => n !== h.dataset.name);
+					if (!h.classList.contains("closed")) list.push(h.dataset.name);
+					try {
+						localStorage.setItem(FOLD_KEY, JSON.stringify(list));
+					} catch (e) {
+						// without browser storage the sections only stay folded until reload
+					}
+					h.classList.toggle("closed");
+				});
+			}
+			// the interface reuses header elements when sections change, so check the name each time
+			if (h.dataset.name !== name) {
+				h.dataset.name = name;
+				h.classList.toggle("closed", closed.includes(name));
+			}
+		});
+	}
+}
+
+// Schedule: resizable text field with one rule per line instead of the one-line input, next to
+// it the rules as the device understood them (sensor "Schedule rules"), the next one in bold.
+// A change is sent when the field loses the focus, joined with "; " (max. 255 characters).
+const SCHED_SIZE_KEY = "esphome-schedule-size";
+const SCHED_STYLE = `
+.sched-edit { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px;
+	padding: 4px 8px 10px 8px; }
+@media (width<=700px) { .sched-edit { grid-template-columns: minmax(0, 1fr); } }
+.sched-edit textarea { width: 30em; min-width: 12em; max-width: 100%; min-height: 8em; resize: both;
+	box-sizing: border-box; font: 14px/21px ui-monospace, monospace;
+	padding: 6px; border-radius: 4px; border: 1px solid rgba(127, 127, 127, 0.5);
+	background: transparent; color: inherit; white-space: pre; overflow-x: auto; }
+.sched-edit ol { margin: 0; padding: 7px 0 0 1.8em; font-size: 14px; line-height: 21px; }
+.sched-edit li.next { font-weight: 700; }
+.sched-edit .sched-note { grid-column: 1 / -1; font-size: 0.8em; opacity: 0.7; }
+.sched-edit .sched-note.error { opacity: 1; color: #ef4444; }
+`;
+
+function scheduleRows(sr) {
+	let edit = null, list = null;
+	sr.querySelectorAll(".entity-row").forEach((row) => {
+		const name = row.children[1] && row.children[1].textContent.trim();
+		if (name === "Schedule" && row.querySelector("input")) edit = row;
+		else if (name === "Schedule rules") list = row;
+	});
+	return { edit, list };
+}
+
+function scheduleLines(text) {
+	return text.split(/[;\n]/).map((s) => s.trim()).filter((s) => s);
+}
+
+function scheduleBox() {
+	const r = root();
+	const table = r && r.querySelector("esp-entity-table");
+	const sr = table && table.shadowRoot;
+	const text = states["text/Schedule"];
+	if (!sr || !text) return;
+	const { edit, list } = scheduleRows(sr);
+	if (!edit) return;
+	style(sr, "sched-style", SCHED_STYLE);
+	edit.querySelector("input").parentElement.style.display = "none";
+	if (list) list.style.display = "none";
+	let box = sr.querySelector(".sched-edit");
+	if (!box) {
+		box = document.createElement("div");
+		box.className = "sched-edit";
+		box.innerHTML = '<textarea spellcheck="false"></textarea><ol></ol><div class="sched-note"></div>';
+		const ta = box.querySelector("textarea");
+		// size dragged by the user, remembered per device
+		try {
+			const size = JSON.parse(localStorage.getItem(SCHED_SIZE_KEY) || "null");
+			if (size) {
+				ta.style.width = size.w + "px";
+				ta.style.height = size.h + "px";
+			}
+		} catch (e) {
+			// without browser storage the default size applies
+		}
+		ta.addEventListener("mouseup", () => {
+			if (!ta.style.width && !ta.style.height) return;
+			try {
+				localStorage.setItem(SCHED_SIZE_KEY, JSON.stringify({ w: ta.offsetWidth, h: ta.offsetHeight }));
+			} catch (e) {
+				// without browser storage the size is not remembered
+			}
+		});
+		ta.addEventListener("input", () => {
+			ta.dataset.dirty = "1";
+			scheduleNote(box);
+		});
+		ta.addEventListener("change", () => {
+			const value = scheduleLines(ta.value).join("; ");
+			if (value.length > 255) return;
+			post("text/Schedule", "set", "value=" + encodeURIComponent(value))
+				.then(() => delete ta.dataset.dirty)
+				.catch(() => {});
+		});
+	}
+	// the interface may reorder rows; keep the box right below the schedule row
+	if (box.previousElementSibling !== edit) edit.after(box);
+	const ta = box.querySelector("textarea");
+	const lines = scheduleLines(String(text.value !== undefined ? text.value : text.state || ""));
+	if (!ta.dataset.dirty && box.getRootNode().activeElement !== ta) {
+		ta.value = lines.join("\n");
+		if (!ta.style.height) ta.rows = Math.max(4, lines.length + 1);
+	}
+	const rules = states["text_sensor/Schedule rules"];
+	const items = rules ? String(rules.value !== undefined ? rules.value : rules.state || "").split("\n").filter((s) => s) : [];
+	const ol = box.querySelector("ol");
+	ol.innerHTML = "";
+	for (const item of items) {
+		const li = document.createElement("li");
+		const next = item.startsWith("▶ ");
+		li.textContent = next ? item.slice(2) : item;
+		li.classList.toggle("next", next);
+		if (next) li.title = "next switching point";
+		ol.appendChild(li);
+	}
+	scheduleNote(box);
+}
+
+function scheduleNote(box) {
+	const ta = box.querySelector("textarea");
+	const n = scheduleLines(ta.value).join("; ").length;
+	const note = box.querySelector(".sched-note");
+	note.classList.toggle("error", n > 255);
+	note.textContent = n > 255 ? `${n} of 255 characters: too long, not saved`
+		: `One rule per line (or separated by ";"), saved when leaving the field · ${n} of 255 characters`;
+}
+
 function setup() {
 	button();
+	stateListen();
+	powerButton();
+	sections();
+	scheduleBox();
 	splitter();
 	title();
 	historyBox();
@@ -410,6 +673,8 @@ function apply(tries = 0) {
 	setInterval(lock, 500);
 }
 
+// listen right away, the device sends the states once when the event stream opens
+stateListen();
 apply();
 // the interface toggles on double click itself, remember the state afterwards
 document.addEventListener("entity-tab-header-double-clicked", () => setTimeout(remember, 0));

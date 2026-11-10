@@ -1,15 +1,15 @@
 // Schedules as text: parse rules, find the rule for a given time, determine the next switching point.
 // Included through schedule.yaml (esphome: includes), no dependency on ESPHome.
 //
-// Format: rules separated by ";", parts of a rule separated by spaces, case-insensitive.
-//	Days         7 characters Mon…Sun, x = on, _ = off                (required)
+// Format: rules separated by ";" or a line break, parts of a rule separated by spaces, case-insensitive.
+//	Days         7 characters Mon…Sun, x = on, _ = off, or X = daily  (required)
 //	Time         H:MM or HH:MM                                         (required)
 //	Temperature  number 10–35, decimal separator . or ,                (optional, before the mode)
 //	Mode         off, on, auto, heat, cool, dry, fan, keep             (required)
 //	             on = last used mode, keep = mode and on/off unchanged
 //	Fan          an option of the device's fan speed select           (optional, first word after the mode)
 //	Vanes        v1–v5 vertical, h1–h5 horizontal                      (optional)
-// Example: xxxxx__ 6:30 22 heat auto; xxxxx__ 8:00 off; _____xx 8:20 21 heat 2 v3 h1
+// Example: xxxxx__ 6:30 22 heat auto; xxxxx__ 8:00 off; _____xx 8:20 21 heat 2 v3 h1; X 22:00 off
 #pragma once
 
 #include <cctype>
@@ -98,18 +98,22 @@ inline bool parse_rule(const std::vector<std::string> &w, const std::vector<std:
 		err = "too short";
 		return false;
 	}
-	// days
-	if (w[0].size() != 7) {
-		err = "days need 7 characters";
-		return false;
-	}
-	for (int i = 0; i < 7; i++) {
-		char c = w[0][i];
-		if (c == 'x' || c == 'X')
-			r.days |= 1 << i;
-		else if (c != '_') {
-			err = "days: only x and _";
+	// days: "X" = daily, otherwise 7 characters
+	if (w[0] == "X" || w[0] == "x") {
+		r.days = 0x7F;
+	} else {
+		if (w[0].size() != 7) {
+			err = "days need 7 characters or X";
 			return false;
+		}
+		for (int i = 0; i < 7; i++) {
+			char c = w[0][i];
+			if (c == 'x' || c == 'X')
+				r.days |= 1 << i;
+			else if (c != '_') {
+				err = "days: only x and _";
+				return false;
+			}
 		}
 	}
 	// time
@@ -182,7 +186,11 @@ inline void parse(const std::string &text, const std::vector<std::string> &fans,
 	rules.clear();
 	error.clear();
 	int n = 0;
-	for (const auto &part : split(text, ';')) {
+	std::string t = text;
+	for (auto &c : t)
+		if (c == '\n')
+			c = ';';
+	for (const auto &part : split(t, ';')) {
 		auto w = words(part);
 		if (w.empty())
 			continue;
@@ -243,8 +251,11 @@ inline std::string format(const std::vector<Rule> &rules, const std::vector<std:
 	for (const auto &r : rules) {
 		if (!out.empty())
 			out += "; ";
-		for (int d = 0; d < 7; d++)
-			out += (r.days & (1 << d)) ? 'x' : '_';
+		if ((r.days & 0x7F) == 0x7F)
+			out += 'X';
+		else
+			for (int d = 0; d < 7; d++)
+				out += (r.days & (1 << d)) ? 'x' : '_';
 		char buf[24];
 		std::snprintf(buf, sizeof(buf), " %d:%02d", r.minute / 60, r.minute % 60);
 		out += buf;
@@ -294,6 +305,34 @@ inline int minutes_to_next(const std::vector<Rule> &rules, int wd, int minute, c
 			break;
 	}
 	return best;
+}
+
+// Days of a rule as text: "Daily", "Mon–Fri", "Sat, Sun", "Mon–Wed, Fri", "Never"
+inline std::string days_text(uint8_t days) {
+	days &= 0x7F;
+	if (days == 0x7F)
+		return "Daily";
+	if (days == 0)
+		return "Never";
+	std::string out;
+	for (int d = 0; d < 7;) {
+		if (!(days & (1 << d))) {
+			d++;
+			continue;
+		}
+		int e = d;
+		while (e + 1 < 7 && (days & (1 << (e + 1))))
+			e++;
+		if (!out.empty())
+			out += ", ";
+		out += DAY_LABELS[d];
+		if (e - d >= 2)
+			out += std::string("–") + DAY_LABELS[e];
+		else if (e - d == 1)
+			out += std::string(", ") + DAY_LABELS[e];
+		d = e + 1;
+	}
+	return out;
 }
 
 // Short text without device names, e.g. "Mon 06:30 Heat 22"

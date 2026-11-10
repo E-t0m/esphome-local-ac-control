@@ -36,7 +36,7 @@ EXTRAS = os.path.join(HERE, "ui-extras.js")
 MDI_URL = "https://raw.githubusercontent.com/iconify/icon-sets/master/json/mdi.json"
 # icons used by the interface itself, including composed names
 UI_ICONS = {"circle", "circle-off-outline", "theme-light-dark",
-	"checkbox-marked-circle", "checkbox-blank-circle-outline", "text-box-outline"}
+	"checkbox-marked-circle", "checkbox-blank-circle-outline", "text-box-outline", "power"}
 # names ending with a hyphen are beginnings of composed names and are dropped
 ICON_RE = re.compile(r"mdi:([a-z0-9][a-z0-9-]*)")
 

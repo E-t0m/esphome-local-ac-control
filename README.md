@@ -22,13 +22,14 @@ TCL units use the component [tclac](https://github.com/I-am-nightingale/tclac), 
 
 | File | Purpose |
 |---|---|
-| `schedule.yaml`, `schedule.h` | schedules as a text field, time via NTP |
+| `schedule.yaml`, `schedule.h` | schedules as a text field, time via NTP, switch "Power" |
 | `setpoint-guidance.yaml` | self-learning setpoint guidance for heating |
 | `standalone.yaml` | select "Reboot without API client", button "Reboot" |
 | `tcl-extra.yaml` | additional values from the TCL status frames (compressor frequency, estimated power, timers, energy, unknown bytes) |
 | `tcl-protocol.yaml` | raw UART access for `tcl_probe.py` |
 | `history.yaml`, `history.h` | history in RAM with growing interval (1 s up to 64 s, about 10.7 hours), shown as a chart in the web interface |
-| `ui-extras.js` | extras for the web interface: collapsible log, adjustable column width, lock while offline |
+| `ui-extras.js` | extras for the web interface: power button, collapsible log, adjustable column width, lock while offline |
+| `ac-panel.py`, `ac-panel.example.yaml` | web page on a Linux computer to switch all units on/off and set their temperature |
 | `build-ui.py` | builds `esphome-ui.js`: web interface with icons and `ui-extras.js`, served from the device |
 | `docs/flash-tcl-serial.md` | first flash of a TCL module over the serial port, backup of the original firmware |
 | `klima-tcl-transition.yaml` | transition firmware that switches the flash layout of a TYWE1S via OTA |
@@ -74,17 +75,20 @@ web_server:
 
 `ui-extras.js` adds:
 
+- with the switch "Power" on the device (`schedule.yaml`), a power button at the very top left: off, or on with the last used mode
 - a log icon at the top right that shows or hides the log column; collapsed by default
 - a draggable divider to the right of the entities, double click resets the width
 - all controls locked while the interface has no connection to the device
 - the device name at the top reloads the page when clicked, e.g. after an update
 - with `history.yaml` on the device, a history chart above the entities (see below); it fills the width and compresses as the history grows
+- every section (and the history) folds with a click on its header; the browser remembers which ones are folded
+- with `schedule.yaml` on the device, a resizable text field for the schedule with one rule per line, next to it the rules as the device understood them, the next switching point in bold
 
 The browser remembers these settings per device.
 
 ## Schedules
 
-The text field "Schedule" holds any number of rules, separated by `;`:
+The text field "Schedule" holds up to 10 rules, separated by `;` or a line break, 255 characters in total:
 
 ```
 xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off; _____xx 8:20 21 keep 2
@@ -92,7 +96,7 @@ xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off; _____xx 8:20 21 keep 2
 
 | Part | Required | Values |
 |---|---|---|
-| days | yes | 7 characters Mon…Sun, `x` = on, `_` = off |
+| days | yes | 7 characters Mon…Sun, `x` = on, `_` = off, or a single `X` = daily |
 | time | yes | `6:30`, `06:30`, `20:05` |
 | temperature | no | e.g. `22` or `21.5`, before the mode; missing = unchanged |
 | mode | yes | `off`, `on` (last used mode), `auto`, `heat`, `cool`, `dry`, `fan`, `keep` (mode and on/off unchanged) |
@@ -102,8 +106,10 @@ xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off; _____xx 8:20 21 keep 2
 - Each rule switches once at its minute. With several rules at the same minute the last one wins.
 - With `keep` and the unit switched off only the target temperature is set.
 - After a reboot the last switching point of the past 15 minutes is caught up, unless it was executed before the reboot.
-- "Schedule check" shows `OK, n rules` or the first error, "Schedule syntax" a short guide with the fan words of the device, "Next switching" the next switching point with all its settings.
+- "Schedule check" shows `OK, n rules` or the first error, "Schedule syntax" a short guide with the fan words of the device.
+- "Schedule rules" lists the rules one per line with their days and settings, e.g. `Mon–Fri 06:30 · Heat · 22 °C · Fan speed Auto`; the next one starts with `▶ `. In the web interface the list stands next to the text field.
 - The switch "Schedules" turns all schedules on or off.
+- The switch "Power" switches the unit off, or on again with the last used mode, like the rule mode `on`; setpoint, fan speed and vanes stay as the unit has them. It follows the unit, also when it is switched by remote control. `ui-extras.js` shows it as a power button at the very top left of the web interface, blue while the unit is on.
 - At most 10 rules. They are stored packed rather than as text, because the settings storage of the ESP8266 holds only 512 bytes for all stored settings. After a reboot the text field shows the stored rules in the same format; rules with errors are not stored.
 
 The time comes from NTP, by default from `pool.ntp.org`. With the substitution `ntp_server` set to the router (e.g. `fritz.box`) no internet access is needed while the router keeps its own clock. The substitution `timezone` sets the time zone, default `Europe/Berlin`.
@@ -163,7 +169,8 @@ The Bosch Climate 4000i is built by Midea; it is the Midea Xtreme Save, model co
 |---|---|
 | Climate | mode, setpoint (0.5 °C steps); Heat/Cool, Heat, Cool, Dry and Fan only are always offered, because the autoconf report of the 4000i does not always contain heating |
 | Fan speed | select Auto, Low, Medium, High, Silent, Turbo (Silent and Turbo only if the unit reports them), since the climate card of the web interface shows no fan modes |
-| Vertical louver, Horizontal louver | fixed vane position in five steps or "Last position"; the position is moved to again every time the unit is switched on, and the position reported by the unit is shown in the select |
+| Vertical louver, Horizontal louver | fixed vane position in five steps or "Last position"; the select shows the position reported by the unit |
+| Louver restore delay | after switching on, the chosen positions are sent again after this time (default 15 s) and then every 30 s until the unit reports them, at most 10 times; while heating starts, the unit keeps the vanes in its own position for a while and ignores commands |
 | Swing step | moves the vanes one step, like a short press of the swing button |
 | Beeper, Toggle display | beeper on/off, display of the indoor unit on/off |
 | Compressor frequency, Outdoor unit power | from the diagnostic data of the unit |
@@ -188,6 +195,43 @@ The Bosch Climate 4000i reports "Outdoor unit power", which covers only part of 
 
 The defaults (12 W, 66 W, 1.13) were measured on the CL4000i 26 E in heating mode with fan auto and match a power meter within about 10 W at steady load. "Total energy" sums up the energy since the last boot.
 
+## Panel for all units
+
+`ac-panel.py` runs on a Linux computer in the home network and serves one page for all units: on/off and setpoint per unit, with room temperature and mode. It keeps the event stream of each module open and sends the commands through their REST interface; the passwords of the modules stay on this computer. It needs Python 3 with PyYAML (`sudo apt install python3-yaml`) and the switch "Power" (`schedule.yaml`) on each module.
+
+```bash
+cp ac-panel.example.yaml ac-panel.yaml
+python3 ac-panel.py
+```
+
+Enter the units in `ac-panel.yaml` (name, host name or IP, password from `secrets.yaml`) and open `http://COMPUTER:8080`. `panel_password` protects the page itself (user `admin`); without this line the page is open to everyone in the network. A setpoint changed with − and + is sent 0.8 s after the last click, in the step of the unit (1 °C on TCL, 0.5 °C on Midea).
+
+As a service that starts with the computer, `~/.config/systemd/user/ac-panel.service`:
+
+```ini
+[Unit]
+Description=Air conditioner panel
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/github/esphome-local-ac-control
+ExecStart=/usr/bin/python3 ac-panel.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now ac-panel
+loginctl enable-linger $USER
+journalctl --user -u ac-panel -f
+```
+
+`enable-linger` keeps the service running without a login.
+
 ## Running without Home Assistant
 
 ESPHome reboots a device after 15 minutes without an API client. `standalone.yaml` replaces this with the select "Reboot without API client" (`Never`, `15 min` … `24 h`, default `Never`). A pending switching point postpones the reboot until it has been executed.
@@ -200,6 +244,8 @@ Control through REST, with digest authentication:
 curl --digest -u admin:PASSWORD -X POST "http://klima-bosch.local/climate/Climate/set?mode=HEAT&target_temperature=23"
 curl --digest -u admin:PASSWORD -X POST "http://klima-bosch.local/select/Fan%20speed/set?option=High"
 curl --digest -u admin:PASSWORD -X POST "http://klima-bosch.local/text/Schedule/set?value=xxxxx__%206:30%20heat"
+curl --digest -u admin:PASSWORD -X POST "http://klima-bosch.local/switch/Power/turn_off"
+curl --digest -u admin:PASSWORD -X POST "http://klima-bosch.local/switch/Power/turn_on"
 ```
 
 On the TCL units the climate entity is called `<device_name> Climate`, e.g. `/climate/klimatcl%20Climate/set`.

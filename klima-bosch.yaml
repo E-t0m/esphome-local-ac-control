@@ -4,8 +4,8 @@
 # YAML does not allow tabs, hence indentation with spaces.
 
 substitutions:
-  # schedules (schedule.yaml): climate component and vane selects; move the vanes only
-  # after louver_restore (10 s after switching on); time via NTP
+  # schedules (schedule.yaml): climate component and vane selects; the vanes of a switching
+  # point are sent after sched_vane_delay and then checked by louver_restore; time via NTP
   sched_climate: bosch_climate
   sched_fan: fan_speed
   sched_vane_v: vertical_louver
@@ -27,6 +27,13 @@ substitutions:
 esphome:
   name: klima-bosch
   friendly_name: Klima Bosch
+  on_boot:
+    priority: -100
+    then:
+      # take over the selected positions once, when the stored ones are still unset
+      - lambda: |-
+          if (id(louver_v_want) < 0) id(louver_v_want) = id(vertical_louver).active_index().value_or(0);
+          if (id(louver_h_want) < 0) id(louver_h_want) = id(horizontal_louver).active_index().value_or(0);
 
 esp8266:
   board: esp12e
@@ -41,6 +48,35 @@ globals:
   - id: climate_was_on
     type: bool
     initial_value: "false"
+  # selected vane positions (index of the select, 0 = "Last position"); the selects show the
+  # position reported by the unit, these keep what was chosen
+  - id: louver_v_want
+    type: int
+    restore_value: true
+    initial_value: "-1"
+  - id: louver_h_want
+    type: int
+    restore_value: true
+    initial_value: "-1"
+  # last reported positions (1/25/50/75/100) and when they came, to check louver_restore
+  - id: louver_v_seen
+    type: int
+    initial_value: "-1"
+  - id: louver_h_seen
+    type: int
+    initial_value: "-1"
+  - id: louver_v_seen_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: louver_h_seen_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: louver_sent_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: louver_tries
+    type: int
+    initial_value: "0"
 
 packages:
   # select "Reboot without API client" and button "Reboot"
@@ -137,34 +173,39 @@ climate:
           id(climate_was_on) = on;
     # query the vane position (Midea properties 0x0009/0x000A)
     # The unit reports the position as value 1/25/50/75/100, not as an angle. The sensors
-    # stay internal, the selects "… louver" show the position.
+    # stay internal, the selects "… louver" show the position; louver_restore compares it
+    # with the chosen one.
     vertical_louver_angle:
       name: Vertical louver angle
       internal: true
-      # show the reported position in the select while a fixed position is selected there
+      # show the reported position in the select while a fixed position is chosen
       on_value:
         - lambda: |-
             static const uint8_t values[] = {1, 25, 50, 75, 100};
+            id(louver_v_seen) = (int) x;
+            id(louver_v_seen_ms) = millis();
+            if (id(louver_v_want) <= 0) return;
             auto active = id(vertical_louver).active_index();
-            if (!active.has_value() || *active == 0) return;
             for (size_t i = 0; i < 5; i++) {
               if ((int) x == values[i]) {
-                if (*active != i + 1) id(vertical_louver).publish_state(i + 1);
+                if (!active.has_value() || *active != i + 1) id(vertical_louver).publish_state(i + 1);
                 return;
               }
             }
     horizontal_louver_angle:
       name: Horizontal louver angle
       internal: true
-      # show the reported position in the select while a fixed position is selected there
+      # show the reported position in the select while a fixed position is chosen
       on_value:
         - lambda: |-
             static const uint8_t values[] = {1, 25, 50, 75, 100};
+            id(louver_h_seen) = (int) x;
+            id(louver_h_seen_ms) = millis();
+            if (id(louver_h_want) <= 0) return;
             auto active = id(horizontal_louver).active_index();
-            if (!active.has_value() || *active == 0) return;
             for (size_t i = 0; i < 5; i++) {
               if ((int) x == values[i]) {
-                if (*active != i + 1) id(horizontal_louver).publish_state(i + 1);
+                if (!active.has_value() || *active != i + 1) id(horizontal_louver).publish_state(i + 1);
                 return;
               }
             }
@@ -213,6 +254,20 @@ sensor:
       - multiply: 0.001
 
 number:
+  # wait after switching on before the vanes are sent again (see louver_restore)
+  - platform: template
+    id: louver_delay
+    name: Louver restore delay
+    icon: mdi:timer-sand
+    entity_category: config
+    unit_of_measurement: s
+    min_value: 5
+    max_value: 120
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 15
   - platform: template
     id: bosch_power_factor
     name: Power factor
@@ -252,20 +307,41 @@ number:
     restore_value: true
     initial_value: 12
 
-# send the selected vane positions again after switching on.
-# The pause gives the unit time to open the vanes itself after the start.
+# send the chosen vane positions again after switching on, after "Louver restore delay".
+# While heating starts, the unit keeps the vanes in its own position and ignores commands
+# (cold air prevention), so the positions are sent again every 30 s until the unit reports
+# them, at most 10 times.
 script:
   - id: louver_restore
     mode: restart
     then:
-      - delay: 10s
-      - lambda: |-
-          auto a = id(vertical_louver).active_index();
-          if (a.has_value() && *a > 0) id(vertical_louver).make_call().set_index(*a).perform();
-      - delay: 1500ms
-      - lambda: |-
-          auto a = id(horizontal_louver).active_index();
-          if (a.has_value() && *a > 0) id(horizontal_louver).make_call().set_index(*a).perform();
+      - delay: !lambda return (uint32_t) (id(louver_delay).state * 1000);
+      - lambda: id(louver_tries) = 0;
+      - while:
+          condition:
+            lambda: |-
+              static const int values[] = {1, 25, 50, 75, 100};
+              if (id(bosch_climate).mode == climate::CLIMATE_MODE_OFF) return false;
+              if (id(louver_tries) >= 10) {
+                ESP_LOGW("louver", "Unit does not report the chosen vane positions, giving up");
+                return false;
+              }
+              if (id(louver_tries) == 0) return id(louver_v_want) > 0 || id(louver_h_want) > 0;
+              // done when every chosen position was reported after the last command
+              auto ok = [](int want, int seen, uint32_t seen_ms) {
+                return want <= 0 || (seen == values[want - 1] && (int32_t) (seen_ms - id(louver_sent_ms)) > 0);
+              };
+              return !(ok(id(louver_v_want), id(louver_v_seen), id(louver_v_seen_ms)) &&
+                       ok(id(louver_h_want), id(louver_h_seen), id(louver_h_seen_ms)));
+          then:
+            - lambda: |-
+                id(louver_tries)++;
+                id(louver_sent_ms) = millis();
+                if (id(louver_v_want) > 0) id(vertical_louver).make_call().set_index(id(louver_v_want)).perform();
+            - delay: 1500ms
+            - lambda: |-
+                if (id(louver_h_want) > 0) id(horizontal_louver).make_call().set_index(id(louver_h_want)).perform();
+            - delay: 30s
 
 switch:
   - platform: template
@@ -359,6 +435,7 @@ select:
           static const uint8_t values[] = {1, 25, 50, 75, 100};
           auto index = id(vertical_louver).index_of(x);
           if (!index.has_value() || *index > 5) return;
+          id(louver_v_want) = (int) *index;
           // "Last position": fix nothing, the unit leaves the vane where it is
           if (*index == 0) return;
           uint8_t value = values[*index - 1];
@@ -400,6 +477,7 @@ select:
           static const uint8_t values[] = {1, 25, 50, 75, 100};
           auto index = id(horizontal_louver).index_of(x);
           if (!index.has_value() || *index > 5) return;
+          id(louver_h_want) = (int) *index;
           // "Last position": fix nothing, the unit leaves the vane where it is
           if (*index == 0) return;
           uint8_t value = values[*index - 1];

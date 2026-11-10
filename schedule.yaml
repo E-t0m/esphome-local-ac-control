@@ -20,6 +20,9 @@
 # - The rules are stored packed (at most 10), not as text, because the settings storage of the
 #   ESP8266 is only 512 bytes. After a reboot the text field shows them in the same format;
 #   invalid rules are not stored.
+# - The switch "Power" switches the unit off, or on again with the last used mode; setpoint,
+#   fan speed and vanes stay as the unit has them. ui-extras.js shows it as a button at the
+#   top left of the web interface.
 # YAML does not allow tabs, hence indentation with spaces.
 
 substitutions:
@@ -87,6 +90,35 @@ switch:
     web_server:
       sorting_group_id: sched_group
       sorting_weight: 1
+  # on/off with the last used mode; follows the climate component, also when switched by
+  # remote control. DISABLED: no action at boot, the unit keeps its state.
+  - platform: template
+    name: Power
+    id: ac_power
+    icon: mdi:power
+    restore_mode: DISABLED
+    lambda: |-
+      return id(${sched_climate}).mode != climate::CLIMATE_MODE_OFF;
+    turn_on_action:
+      - script.execute:
+          id: sched_run
+          mode: !lambda return schedule::SCH_LAST;
+          temp: !lambda return NAN;
+          fan: -1
+          v: 0
+          h: 0
+    turn_off_action:
+      # remember the mode right away, the interval below only checks every 10 s
+      - lambda: |-
+          auto mode = id(${sched_climate}).mode;
+          if (mode != climate::CLIMATE_MODE_OFF) id(sched_last_mode) = (int) mode;
+      - script.execute:
+          id: sched_run
+          mode: !lambda return schedule::SCH_OFF;
+          temp: !lambda return NAN;
+          fan: -1
+          v: 0
+          h: 0
 
 text:
   - platform: template
@@ -122,24 +154,34 @@ text_sensor:
     web_server:
       sorting_group_id: sched_group
       sorting_weight: 5
+  # the rules one per line, in the order of the text field, with their days; the next one
+  # starts with "▶ ". ui-extras.js shows the list next to the text field.
   - platform: template
-    name: Next switching
-    id: sched_next_text
-    icon: mdi:clock-outline
+    name: Schedule rules
+    id: sched_rules_text
+    icon: mdi:format-list-bulleted
     update_interval: 15s
     web_server:
       sorting_group_id: sched_group
-      sorting_weight: 4
+      sorting_weight: 6
     lambda: |-
-      if (!id(sched_master).state) return std::string("Schedules off");
-      auto now = id(sntp_time).now();
-      if (!now.is_valid()) return std::string("No time");
-      int wd = schedule::weekday(now.day_of_week);
+      const auto &rules = schedule::rules();
       const schedule::Rule *next = nullptr;
-      int delta = schedule::minutes_to_next(schedule::rules(), wd, now.hour * 60 + now.minute, &next);
-      if (delta < 0) return std::string("None");
-      int day = (wd + (now.hour * 60 + now.minute + delta) / 1440) % 7;
-      return schedule::text(*next, day);
+      auto now = id(sntp_time).now();
+      if (id(sched_master).state && now.is_valid())
+        schedule::minutes_to_next(rules, schedule::weekday(now.day_of_week), now.hour * 60 + now.minute, &next);
+      std::string out;
+      for (const auto &r : rules) {
+        int first = 0;
+        while (first < 6 && !(r.days & (1 << first))) first++;
+        // the description starts with the weekday ("Mon "), replaced by all days of the rule
+        std::string d = schedule::text(r, first);
+        d = d.size() > 4 ? d.substr(4) : d;
+        if (!out.empty()) out += "\n";
+        if (&r == next) out += "▶ ";
+        out += schedule::days_text(r.days) + " " + d;
+      }
+      return out;
 
 interval:
   # remember the mode that "on" switches on with
@@ -251,7 +293,7 @@ script:
             fan_words += (fan_words.empty() ? "" : " ") + fans.back();
           }
           id(sched_syntax).publish_state(
-              "MoTuWeThFrSaSu as x/_, H:MM, [°C], off|on|auto|heat|cool|dry|fan|keep, [fan: " + fan_words +
+              "MoTuWeThFrSaSu as x/_ or X = daily, H:MM, [°C], off|on|auto|heat|cool|dry|fan|keep, [fan: " + fan_words +
               "], [v1-v5 up-down], [h1-h5 left-right]; next rule. Example: xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off");
           std::string error;
           schedule::parse(std::string(id(sched_text).state.c_str()), fans, schedule::rules(), error);
@@ -260,7 +302,7 @@ script:
           ESP_LOGI("schedule", "%s", status.c_str());
           id(sched_check).publish_state(status);
           id(sched_parsed) = true;
-          id(sched_next_text).update();
+          id(sched_rules_text).update();
 
   # store the executed switching point right away, not only after flash_write_interval
   - id: sched_save

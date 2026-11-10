@@ -6,3 +6,5 @@
 /.mdi.json
 /build-ui.log
 __pycache__/
+# local configuration of ac-panel.py
+/ac-panel.yaml
