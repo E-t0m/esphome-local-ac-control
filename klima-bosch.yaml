@@ -1,4 +1,5 @@
-# ESPHome configuration for a Midea-based air conditioner, tested with the Bosch Climate 4000i,
+# ESPHome configuration for a Midea-based air conditioner, tested with the Bosch Climate 4000i
+# (= Midea Xtreme Save, MSAGBU),
 # with SMLIGHT SLWF-01Pro v2 (ESP8266, USB-A plug, 5 V level shifter).
 # YAML does not allow tabs, hence indentation with spaces.
 
@@ -10,7 +11,8 @@ substitutions:
   sched_vane_v: vertical_louver
   sched_vane_h: horizontal_louver
   sched_vane_delay: 14s
-  ntp_server: fritz.box
+  # time server, default pool.ntp.org; the router keeps working without internet, e.g. fritz.box
+  # ntp_server: fritz.box
   # setpoint guidance (setpoint-guidance.yaml): the compressor runs while its frequency is above 0
   guide_climate: bosch_climate
   guide_running: "id(bosch_comp_freq).state > 0"
@@ -127,8 +129,6 @@ climate:
       name: Indoor fan target speed
     outdoor_fan_speed:
       name: Outdoor fan speed
-    humidity_setpoint:
-      name: Humidity setpoint
     # move the vanes to the selected positions again when the unit is switched on
     on_state:
       - lambda: |-

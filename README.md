@@ -1,6 +1,6 @@
 # esphome-local-ac-control
 
-ESPHome firmware for TCL and Midea air conditioners (e.g. Bosch Climate 4000i) that runs with or without Home Assistant: control through the built-in web interface and its REST API, schedules and a self-learning setpoint guidance on the device, a web interface that works without internet access. Home Assistant connects through the native API as usual.
+ESPHome firmware for TCL and Midea air conditioners (e.g. Midea Xtreme Save, Bosch Climate 4000i) that runs with or without Home Assistant: control through the built-in web interface and its REST API, schedules and a self-learning setpoint guidance on the device, a web interface that works without internet access. Home Assistant connects through the native API as usual.
 
 <p>
 	<a href="docs/bosch-midea.png"><img src="docs/bosch-midea.png" width="400" alt="Web interface of a Bosch Climate 4000i (Midea)"></a>
@@ -12,11 +12,11 @@ Example configurations:
 | Configuration | Tested with | Module |
 |---|---|---|
 | `klima-tcl.yaml` | TCL TAC-09CHSD/XA71I (2.6 kW) and the identical Euromate 482255 | Tuya TYWE1S (ESP8266, 2 MB) on carrier board TYJW2 |
-| `klima-bosch.yaml` | Bosch Climate 4000i (Midea platform) | SMLIGHT SLWF-01Pro v2 |
+| `klima-bosch.yaml` | Bosch Climate 4000i, a Midea Xtreme Save (MSAGBU) with Bosch badge | SMLIGHT SLWF-01Pro v2 |
 
 For several units of the same type, copy the example, change `device_name` (TCL) or `name` (Bosch), `humanly_name` / `friendly_name` and the secret names.
 
-TCL units use the component [tclac](https://github.com/I-am-nightingale/tclac), Midea units the component [juchong/esphome-midea](https://github.com/juchong/esphome-midea).
+TCL units use the component [tclac](https://github.com/I-am-nightingale/tclac), Midea units the component [juchong/esphome-midea](https://github.com/juchong/esphome-midea). `klima-tcl.yaml` takes tclac from the branch `localizable-options-and-log-typos` of the fork [E-t0m/tclac](https://github.com/E-t0m/tclac), which contains fixes that are not yet merged into tclac.
 
 ## Files
 
@@ -103,7 +103,7 @@ xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off; _____xx 8:20 21 keep 2
 - The switch "Schedules" turns all schedules on or off.
 - At most 10 rules. They are stored packed rather than as text, because the settings storage of the ESP8266 holds only 512 bytes for all stored settings. After a reboot the text field shows the stored rules in the same format; rules with errors are not stored.
 
-The time comes from NTP. The configurations here use the router (`ntp_server: fritz.box`), so no internet access is needed while the router keeps its own clock.
+The time comes from NTP, by default from `pool.ntp.org`. With the substitution `ntp_server` set to the router (e.g. `fritz.box`) no internet access is needed while the router keeps its own clock. The substitution `timezone` sets the time zone, default `Europe/Berlin`.
 
 ## Setpoint guidance
 
@@ -144,9 +144,17 @@ The defaults (29 W, −50 W, 18.3 W/Hz) were measured on the Euromate 482255 (TC
 
 `history.yaml` keeps 600 samples (about 3.6 KB) in the RAM of the module, with a growing interval: it starts with one sample per second; whenever the buffer is full, neighbouring samples are averaged in pairs and the interval doubles, up to 64 s, which covers about 10.7 hours. Recorded values: compressor frequency, room temperature, setpoint (empty while the unit is off) and power (estimated power on the TCL units, total power on the Midea unit). The device serves it as `/history.json`; `ui-extras.js` shows it as three charts above the entities, so the curves are complete when the page is opened. The history starts empty after every reboot; writing it to flash would wear the flash out.
 
-## Midea: Bosch Climate 4000i
+## Midea Xtreme Save / Bosch Climate 4000i
 
-`klima-bosch.yaml` is written for the Bosch Climate 4000i and works for other units of the Midea platform as well. The SLWF-01Pro v2 plugs into the unit with its USB-A plug and talks to it through the UART on GPIO12/GPIO14.
+The Bosch Climate 4000i is built by Midea; it is the Midea Xtreme Save, model code MSAGBU, which Midea also sells as Xtreme Pro:
+
+| Bosch | Midea | Capacity |
+|---|---|---|
+| CL4000i 26 E | Xtreme Save 9000 BTU/h (MSAGBU-09…) | 2.6 kW |
+| CL4000i 35 E | Xtreme Save 12000 BTU/h (MSAGBU-12…) | 3.5 kW |
+| CL4000i 53 E | Xtreme Save 18000 BTU/h (MSAGBU-18…) | 5.3 kW |
+
+`klima-bosch.yaml` is written for these units and works for other units of the Midea platform as well. The SLWF-01Pro v2 plugs into the unit with its USB-A plug and talks to it through the UART on GPIO12/GPIO14.
 
 | Entity | Meaning |
 |---|---|

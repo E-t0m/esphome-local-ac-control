@@ -20,7 +20,8 @@ substitutions:
   sched_vane_v: vfixing
   sched_vane_h: hfixing
   sched_vane_delay: 5s
-  ntp_server: fritz.box
+  # time server, default pool.ntp.org; the router keeps working without internet, e.g. fritz.box
+  # ntp_server: fritz.box
   # setpoint guidance (setpoint-guidance.yaml): compressor frequency from tcl-extra.yaml,
   # setpoint in whole degrees
   guide_climate: ${device_name}climate
