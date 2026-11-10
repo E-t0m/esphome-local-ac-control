@@ -2,6 +2,11 @@
 
 ESPHome firmware for TCL and Midea air conditioners (e.g. Bosch Climate 4000i) that runs with or without Home Assistant: control through the built-in web interface and its REST API, schedules and a self-learning setpoint guidance on the device, a web interface that works without internet access. Home Assistant connects through the native API as usual.
 
+<p>
+	<a href="docs/bosch-midea.png"><img src="docs/bosch-midea.png" width="400" alt="Web interface of a Bosch Climate 4000i (Midea)"></a>
+	<a href="docs/tcl-euromate.png"><img src="docs/tcl-euromate.png" width="400" alt="Web interface of a TCL unit"></a>
+</p>
+
 Example configurations:
 
 | Configuration | Tested with | Module |
@@ -152,7 +157,7 @@ The defaults (29 W, −50 W, 18.3 W/Hz) were measured on the Euromate 482255 (TC
 | Beeper, Toggle display | beeper on/off, display of the indoor unit on/off |
 | Compressor frequency, Outdoor unit power | from the diagnostic data of the unit |
 | Indoor fan speed, Indoor fan target speed, Outdoor fan speed | fan speeds in rpm, so the current stage is visible in fan mode auto |
-| Outdoor temperature, Room temperature, Humidity setpoint | values reported by the unit |
+| Outdoor temperature, Room temperature | values reported by the unit |
 | Total power, Total energy | estimated power of the whole unit, see below |
 
 The vanes are set through the Midea properties 0x0009 (vertical) and 0x000A (horizontal) with command B0 and the values 1, 25, 50, 75, 100, like msmart does; property 0x001A (buzzer) is sent along and follows the switch "Beeper", otherwise the unit beeps.
