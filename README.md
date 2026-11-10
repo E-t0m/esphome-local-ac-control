@@ -1,6 +1,6 @@
 # esphome-local-ac-control
 
-ESPHome firmware for air conditioners that can run without Home Assistant: control through the built-in web interface and its REST API, schedules and a self-learning setpoint guidance on the device, a web interface that works without internet access. The native API stays active, so Home Assistant can still be connected.
+ESPHome firmware for TCL and Midea air conditioners (e.g. Bosch Climate 4000i) that runs with or without Home Assistant: control through the built-in web interface and its REST API, schedules and a self-learning setpoint guidance on the device, a web interface that works without internet access. Home Assistant connects through the native API as usual.
 
 Example configurations:
 
@@ -138,6 +138,28 @@ The defaults (29 W, −50 W, 18.3 W/Hz) were measured on the Euromate 482255 (TC
 ## History
 
 `history.yaml` keeps 600 samples (about 3.6 KB) in the RAM of the module, with a growing interval: it starts with one sample per second; whenever the buffer is full, neighbouring samples are averaged in pairs and the interval doubles, up to 64 s, which covers about 10.7 hours. Recorded values: compressor frequency, room temperature, setpoint (empty while the unit is off) and power (estimated power on the TCL units, total power on the Midea unit). The device serves it as `/history.json`; `ui-extras.js` shows it as three charts above the entities, so the curves are complete when the page is opened. The history starts empty after every reboot; writing it to flash would wear the flash out.
+
+## Midea: Bosch Climate 4000i
+
+`klima-bosch.yaml` is written for the Bosch Climate 4000i and works for other units of the Midea platform as well. The SLWF-01Pro v2 plugs into the unit with its USB-A plug and talks to it through the UART on GPIO12/GPIO14.
+
+| Entity | Meaning |
+|---|---|
+| Climate | mode, setpoint (0.5 °C steps); Heat/Cool, Heat, Cool, Dry and Fan only are always offered, because the autoconf report of the 4000i does not always contain heating |
+| Fan speed | select Auto, Low, Medium, High, Silent, Turbo (Silent and Turbo only if the unit reports them), since the climate card of the web interface shows no fan modes |
+| Vertical louver, Horizontal louver | fixed vane position in five steps or "Last position"; the position is moved to again every time the unit is switched on, and the position reported by the unit is shown in the select |
+| Swing step | moves the vanes one step, like a short press of the swing button |
+| Beeper, Toggle display | beeper on/off, display of the indoor unit on/off |
+| Compressor frequency, Outdoor unit power | from the diagnostic data of the unit |
+| Indoor fan speed, Indoor fan target speed, Outdoor fan speed | fan speeds in rpm, so the current stage is visible in fan mode auto |
+| Outdoor temperature, Room temperature, Humidity setpoint | values reported by the unit |
+| Total power, Total energy | estimated power of the whole unit, see below |
+
+The vanes are set through the Midea properties 0x0009 (vertical) and 0x000A (horizontal) with command B0 and the values 1, 25, 50, 75, 100, like msmart does; property 0x001A (buzzer) is sent along and follows the switch "Beeper", otherwise the unit beeps.
+
+The diagnostic values come from several data groups that the component queries in turn, one per `diagnostic_interval`. With 2 s each group is refreshed about every 10 s.
+
+Schedules, setpoint guidance and history work as on the TCL units; the setpoint guidance uses 0.5 °C steps and the compressor frequency reported by the unit.
 
 ## Midea: total power
 
