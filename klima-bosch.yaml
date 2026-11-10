@@ -5,13 +5,13 @@
 
 substitutions:
   # schedules (schedule.yaml): climate component and vane selects; move the vanes only
-  # after louver_restore (10 s after switching on); time from the router
+  # after louver_restore (10 s after switching on); time via NTP
   sched_climate: bosch_climate
   sched_fan: fan_speed
   sched_vane_v: vertical_louver
   sched_vane_h: horizontal_louver
   sched_vane_delay: 14s
-  # time server, default pool.ntp.org; the router keeps working without internet, e.g. fritz.box
+  # time server, default pool.ntp.org; with the router (e.g. fritz.box) no internet access is needed
   # ntp_server: fritz.box
   # setpoint guidance (setpoint-guidance.yaml): the compressor runs while its frequency is above 0
   guide_climate: bosch_climate

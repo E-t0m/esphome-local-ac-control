@@ -14,13 +14,13 @@ substitutions:
   # the carrier board TYJW2 routes the connector to the alternative UART pins of the ESP8266
   uart_rx: GPIO13
   uart_tx: GPIO15
-  # schedules (schedule.yaml): climate component and vane selects from tclac, time from the router
+  # schedules (schedule.yaml): climate component and vane selects from tclac, time via NTP
   sched_climate: ${device_name}climate
   sched_fan: fan_speed
   sched_vane_v: vfixing
   sched_vane_h: hfixing
   sched_vane_delay: 5s
-  # time server, default pool.ntp.org; the router keeps working without internet, e.g. fritz.box
+  # time server, default pool.ntp.org; with the router (e.g. fritz.box) no internet access is needed
   # ntp_server: fritz.box
   # setpoint guidance (setpoint-guidance.yaml): compressor frequency from tcl-extra.yaml,
   # setpoint in whole degrees

@@ -30,6 +30,7 @@ TCL units use the component [tclac](https://github.com/I-am-nightingale/tclac), 
 | `history.yaml`, `history.h` | history in RAM with growing interval (1 s up to 64 s, about 10.7 hours), shown as a chart in the web interface |
 | `ui-extras.js` | extras for the web interface: collapsible log, adjustable column width, lock while offline |
 | `build-ui.py` | builds `esphome-ui.js`: web interface with icons and `ui-extras.js`, served from the device |
+| `docs/flash-tcl-serial.md` | first flash of a TCL module over the serial port, backup of the original firmware |
 | `klima-tcl-transition.yaml` | transition firmware that switches the flash layout of a TYWE1S via OTA |
 | `tcl_probe.py` | investigate and control TCL units through the UART, by adapter or through the ESPHome module |
 | `secrets.example.yaml` | template for `secrets.yaml` |
@@ -41,6 +42,8 @@ python3 -m venv ~/venv/esphome
 ~/venv/esphome/bin/pip install esphome
 cp secrets.example.yaml secrets.yaml
 ```
+
+Tested with ESPHome 2026.6.5.
 
 Fill in `secrets.yaml`. Quote every value, otherwise YAML may read a numeric password as a number. Keys and passwords:
 
@@ -204,6 +207,8 @@ On the TCL units the climate entity is called `<device_name> Climate`, e.g. `/cl
 In a crontab every `%` must be written as `\%`.
 
 ## Flash layout of the TYWE1S
+
+A module with the original Tuya firmware is flashed once over the serial port, see [docs/flash-tcl-serial.md](docs/flash-tcl-serial.md); afterwards all updates run over the air.
 
 The TYWE1S has 2 MB flash. With the default layout only about 400 KB remain for an OTA update next to a firmware of this size. The TCL configurations use the layout `eagle.flash.2m64.ld` (64 KB file system, unused by ESPHome), which leaves almost 1 MB.
 
