@@ -320,14 +320,16 @@ number:
 script:
   # toggle the display of the indoor unit. midea_ac.display_toggle only sends the command when the
   # capability report of the unit lists light control, which the 4000i does not always deliver;
-  # so the frame (query 0x41 with 0x61, as MideaUART builds it) goes directly to the UART.
+  # so the frame (query 0x41 as MideaUART builds it) goes directly to the UART. Bit 0x40 of the
+  # second byte makes the unit beep (as in msmart); it follows the switch "Beeper".
   - id: display_toggle
     mode: queued
     then:
       - lambda: |-
           static uint8_t msg_id = 0;
+          const uint8_t beep = id(beeper_switch).state ? 0x40 : 0x00;
           std::vector<uint8_t> f = {0xAA, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03,
-                                    0x41, 0x61, 0x00, 0xFF, 0x02, 0x00, 0x02};
+                                    0x41, (uint8_t) (0x21 | beep), 0x00, 0xFF, 0x02, 0x00, 0x02};
           f.resize(f.size() + 14, 0x00);
           f.push_back(++msg_id);
           uint8_t crc = 0;
