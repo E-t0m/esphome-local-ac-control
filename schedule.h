@@ -9,7 +9,8 @@
 //	             on = last used mode, keep = mode and on/off unchanged
 //	Fan          an option of the device's fan speed select           (optional, first word after the mode)
 //	Vanes        v1–v5 vertical, h1–h5 horizontal                      (optional)
-// Example: xxxxx__ 6:30 22 heat auto; xxxxx__ 8:00 off; _____xx 8:20 21 heat 2 v3 h1; X 22:00 off
+//	Display      d0 = display off, d1 = display on                      (optional)
+// Example: xxxxx__ 6:30 22 heat auto d1; xxxxx__ 8:00 off; _____xx 8:20 21 heat 2 v3 h1; X 22:00 keep d0
 #pragma once
 
 #include <cctype>
@@ -41,6 +42,7 @@ struct Rule {
 	int8_t fan;      // index of the fan speed select, -1 = unchanged
 	int8_t v;        // 1–5, 0 = unchanged
 	int8_t h;        // 1–5, 0 = unchanged
+	int8_t disp;     // display 0 = off, 1 = on, -1 = unchanged
 };
 
 // The parsed rules of the device (not an ESPHome global, because its type would be declared
@@ -93,7 +95,7 @@ inline std::vector<std::string> words(const std::string &s) {
 
 inline bool parse_rule(const std::vector<std::string> &w, const std::vector<std::string> &fans, Rule &r,
 		std::string &err) {
-	r = Rule{0, 0, NAN, -1, -1, 0, 0};
+	r = Rule{0, 0, NAN, -1, -1, 0, 0, -1};
 	if (w.size() < 3) {
 		err = "too short";
 		return false;
@@ -165,6 +167,10 @@ inline bool parse_rule(const std::vector<std::string> &w, const std::vector<std:
 			(x[0] == 'v' ? r.v : r.h) = x[1] - '0';
 			continue;
 		}
+		if (x == "d0" || x == "d1") {
+			r.disp = x[1] - '0';
+			continue;
+		}
 		if (first) {
 			for (size_t k = 0; k < fans.size(); k++)
 				if (x == fans[k])
@@ -211,7 +217,8 @@ inline void parse(const std::string &text, const std::vector<std::string> &fans,
 
 // Packs the rules into store[2 * MAX_RULES] for the device's settings storage, which is small on
 // the ESP8266 (512 bytes for everything); unused slots are 0.
-//	word 0: bit 31 valid, days (7 bits), minute (11 bits), mode (3 bits), v (3 bits), h (3 bits)
+//	word 0: bit 31 valid, days (7 bits), minute (11 bits), mode (3 bits), v (3 bits), h (3 bits),
+//	        display + 1 (2 bits, 0 = unchanged)
 //	word 1: temperature × 2 (8 bits, 0xFF = unchanged), fan index + 1 (8 bits, 0 = unchanged)
 inline void pack(const std::vector<Rule> &rules, uint32_t *store) {
 	for (int i = 0; i < MAX_RULES; i++) {
@@ -221,7 +228,8 @@ inline void pack(const std::vector<Rule> &rules, uint32_t *store) {
 		}
 		const Rule &r = rules[i];
 		store[2 * i] = 0x80000000u | (uint32_t) (r.days & 0x7F) | ((uint32_t) (r.minute & 0x7FF) << 7) |
-				((uint32_t) (r.mode & 0x7) << 18) | ((uint32_t) (r.v & 0x7) << 21) | ((uint32_t) (r.h & 0x7) << 24);
+				((uint32_t) (r.mode & 0x7) << 18) | ((uint32_t) (r.v & 0x7) << 21) | ((uint32_t) (r.h & 0x7) << 24) |
+				((uint32_t) ((r.disp + 1) & 0x3) << 27);
 		const uint32_t temp = std::isnan(r.temp) ? 0xFF : (uint32_t) std::lround(r.temp * 2);
 		store[2 * i + 1] = (temp & 0xFF) | ((uint32_t) ((r.fan + 1) & 0xFF) << 8);
 	}
@@ -239,6 +247,7 @@ inline void unpack(const uint32_t *store, std::vector<Rule> &rules) {
 		r.mode = (a >> 18) & 0x7;
 		r.v = (a >> 21) & 0x7;
 		r.h = (a >> 24) & 0x7;
+		r.disp = (int8_t) (((a >> 27) & 0x3) - 1);
 		r.temp = (b & 0xFF) == 0xFF ? NAN : (b & 0xFF) / 2.0f;
 		r.fan = (int8_t) (((b >> 8) & 0xFF) - 1);
 		rules.push_back(r);
@@ -273,6 +282,8 @@ inline std::string format(const std::vector<Rule> &rules, const std::vector<std:
 			out += " v" + std::to_string(r.v);
 		if (r.h > 0)
 			out += " h" + std::to_string(r.h);
+		if (r.disp >= 0)
+			out += " d" + std::to_string(r.disp);
 	}
 	return out;
 }

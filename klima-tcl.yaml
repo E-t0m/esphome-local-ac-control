@@ -20,6 +20,7 @@ substitutions:
   sched_vane_v: vfixing
   sched_vane_h: hfixing
   sched_vane_delay: 5s
+  sched_display: display_mode
   # time server, default pool.ntp.org; with the router (e.g. fritz.box) no internet access is needed
   # ntp_server: fritz.box
   # setpoint guidance (setpoint-guidance.yaml): compressor frequency from tcl-extra.yaml,

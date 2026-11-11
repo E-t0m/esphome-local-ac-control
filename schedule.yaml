@@ -7,6 +7,7 @@
 #   sched_vane_v      id of the select for the fixed vertical vane position
 #   sched_vane_h      id of the select for the fixed horizontal vane position
 #   sched_vane_delay  wait after switching on before the vanes are moved
+#   sched_display     id of the switch for the display of the indoor unit
 # Optional substitutions (defaults below): ntp_server, timezone
 # In both vane selects index 0 is "Last position", 1–5 are the fixed positions.
 #
@@ -107,6 +108,7 @@ switch:
           fan: -1
           v: 0
           h: 0
+          disp: -1
     turn_off_action:
       # remember the mode right away, the interval below only checks every 10 s
       - lambda: |-
@@ -119,6 +121,7 @@ switch:
           fan: -1
           v: 0
           h: 0
+          disp: -1
 
 text:
   - platform: template
@@ -224,7 +227,7 @@ interval:
             id(sched_done) = m;
             ESP_LOGI("schedule", "Switching point %s%s", schedule::text(*r, schedule::weekday(t.day_of_week)).c_str(),
                      k > 1 ? " (caught up)" : "");
-            id(sched_run).execute((int) r->mode, r->temp, (int) r->fan, (int) r->v, (int) r->h);
+            id(sched_run).execute((int) r->mode, r->temp, (int) r->fan, (int) r->v, (int) r->h, (int) r->disp);
             id(sched_save).execute();
             break;
           }
@@ -283,6 +286,7 @@ script:
             if (r.fan >= 0) s += " · Fan speed " + option(id(${sched_fan}), r.fan);
             if (r.v > 0) s += " · Vertical " + option(id(${sched_vane_v}), r.v);
             if (r.h > 0) s += " · Horizontal " + option(id(${sched_vane_h}), r.h);
+            if (r.disp >= 0) s += r.disp ? " · Display on" : " · Display off";
             return s;
           };
 
@@ -294,7 +298,7 @@ script:
           }
           id(sched_syntax).publish_state(
               "MoTuWeThFrSaSu as x/_ or X = daily, H:MM, [°C], off|on|auto|heat|cool|dry|fan|keep, [fan: " + fan_words +
-              "], [v1-v5 up-down], [h1-h5 left-right]; next rule. Example: xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off");
+              "], [v1-v5 up-down], [h1-h5 left-right], [d0|d1 display off|on]; next rule. Example: xxxxx__ 6:30 22 heat auto v3; X 22:00 keep d0");
           std::string error;
           schedule::parse(std::string(id(sched_text).state.c_str()), fans, schedule::rules(), error);
           schedule::pack(schedule::rules(), id(sched_store));
@@ -321,7 +325,16 @@ script:
       fan: int
       v: int
       h: int
+      disp: int
     then:
+      # display first, it does not depend on the unit running
+      - if:
+          condition:
+            lambda: return mode != schedule::SCH_OFF && disp >= 0;
+          then:
+            - lambda: |-
+                if (disp) id(${sched_display}).turn_on();
+                else id(${sched_display}).turn_off();
       - lambda: |-
           auto call = id(${sched_climate}).make_call();
           if (mode == schedule::SCH_KEEP) {

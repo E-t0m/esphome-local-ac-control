@@ -102,6 +102,7 @@ xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off; _____xx 8:20 21 keep 2
 | mode | yes | `off`, `on` (last used mode), `auto`, `heat`, `cool`, `dry`, `fan`, `keep` (mode and on/off unchanged) |
 | fan | no | first word after the mode, an option of the device's select "Fan speed" |
 | vanes | no | `v1`–`v5` vertical (`v1` = fully up), `h1`–`h5` horizontal (`h1` = fully left) |
+| display | no | `d0` display of the indoor unit off, `d1` on; with `keep` without changing anything else, e.g. `X 22:00 keep d0` |
 
 - Each rule switches once at its minute. With several rules at the same minute the last one wins.
 - With `keep` and the unit switched off only the target temperature is set.
@@ -172,7 +173,7 @@ The Bosch Climate 4000i is built by Midea; it is the Midea Xtreme Save, model co
 | Vertical louver, Horizontal louver | fixed vane position in five steps or "Last position"; the select shows the position reported by the unit |
 | Louver restore delay | after switching on, the chosen positions are sent again after this time (default 15 s) and then every 30 s until the unit reports them, at most 10 times; while heating starts, the unit keeps the vanes in its own position for a while and ignores commands |
 | Swing step | moves the vanes one step, like a short press of the swing button |
-| Beeper, Toggle display | beeper on/off, display of the indoor unit on/off |
+| Beeper, Display, Toggle display | beeper on/off, display of the indoor unit on/off; the unit only knows "toggle", so the switch "Display" remembers the state after its last command. After switching the display with the remote control, "Toggle display" brings switch and display in line again. |
 | Compressor frequency, Outdoor unit power | from the diagnostic data of the unit |
 | Indoor fan speed, Indoor fan target speed, Outdoor fan speed | fan speeds in rpm, so the current stage is visible in fan mode auto |
 | Outdoor temperature, Room temperature | values reported by the unit |

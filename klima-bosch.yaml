@@ -11,6 +11,7 @@ substitutions:
   sched_vane_v: vertical_louver
   sched_vane_h: horizontal_louver
   sched_vane_delay: 14s
+  sched_display: bosch_display
   # time server, default pool.ntp.org; with the router (e.g. fritz.box) no internet access is needed
   # ntp_server: fritz.box
   # setpoint guidance (setpoint-guidance.yaml): the compressor runs while its frequency is above 0
@@ -48,6 +49,11 @@ globals:
   - id: climate_was_on
     type: bool
     initial_value: "false"
+  # display state after the last command (the switch "Display")
+  - id: bosch_display_assumed
+    type: bool
+    restore_value: true
+    initial_value: "true"
   # selected vane positions (index of the select, 0 = "Last position"); the selects show the
   # position reported by the unit, these keep what was chosen
   - id: louver_v_want
@@ -312,6 +318,31 @@ number:
 # (cold air prevention), so the positions are sent again every 30 s until the unit reports
 # them, at most 10 times.
 script:
+  # toggle the display of the indoor unit. midea_ac.display_toggle only sends the command when the
+  # capability report of the unit lists light control, which the 4000i does not always deliver;
+  # so the frame (query 0x41 with 0x61, as MideaUART builds it) goes directly to the UART.
+  - id: display_toggle
+    mode: queued
+    then:
+      - lambda: |-
+          static uint8_t msg_id = 0;
+          std::vector<uint8_t> f = {0xAA, 0x00, 0xAC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03,
+                                    0x41, 0x61, 0x00, 0xFF, 0x02, 0x00, 0x02};
+          f.resize(f.size() + 14, 0x00);
+          f.push_back(++msg_id);
+          uint8_t crc = 0;
+          for (size_t i = 10; i < f.size(); i++) {
+            crc ^= f[i];
+            for (int k = 0; k < 8; k++) crc = (crc & 1) ? (crc >> 1) ^ 0x8C : crc >> 1;
+          }
+          f.push_back(crc);
+          f[1] = (uint8_t) f.size();
+          f[3] = f[1] ^ 0xAC;
+          uint8_t sum = 0;
+          for (size_t i = 1; i < f.size(); i++) sum += f[i];
+          f.push_back((uint8_t) -sum);
+          id(midea_uart).write_array(f.data(), f.size());
+          ESP_LOGI("display", "Display toggle sent");
   - id: louver_restore
     mode: restart
     then:
@@ -354,11 +385,41 @@ switch:
     turn_off_action:
       - midea_ac.beeper_off:
 
+  # display of the indoor unit; the unit only knows "toggle", so the switch remembers the state
+  # after its last command and toggles only when the display is in the other state. After the
+  # display was switched with the remote control, "Toggle display" brings both in line again.
+  # DISABLED: no action at boot.
+  - platform: template
+    name: Display
+    id: bosch_display
+    icon: mdi:television-ambient-light
+    entity_category: config
+    restore_mode: DISABLED
+    lambda: |-
+      return id(bosch_display_assumed);
+    turn_on_action:
+      - if:
+          condition:
+            lambda: return !id(bosch_display_assumed);
+          then:
+            - script.execute: display_toggle
+      - lambda: id(bosch_display_assumed) = true;
+    turn_off_action:
+      - if:
+          condition:
+            lambda: return id(bosch_display_assumed);
+          then:
+            - script.execute: display_toggle
+      - lambda: id(bosch_display_assumed) = false;
+
 button:
   - platform: template
     name: Toggle display
+    entity_category: config
+    icon: mdi:swap-horizontal
     on_press:
-      - midea_ac.display_toggle:
+      - script.execute: display_toggle
+      - lambda: id(bosch_display_assumed) = !id(bosch_display_assumed);
   # move the vanes one step, like a short press of the swing button
   - platform: template
     name: Swing step
