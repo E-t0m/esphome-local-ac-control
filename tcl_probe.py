@@ -679,7 +679,7 @@ def cmd_scan(args, log):
 					print(f"   {name:17} –")
 			ser.close()
 	if not found:
-		print("\nNo reply on any combination. Check the adapter with a loopback test (see README).")
+		print("\nNo reply on any combination. Check the adapter with a loopback test (see docs/tcl-probe.md).")
 
 
 # ---------------------------------------------------------------- simulator

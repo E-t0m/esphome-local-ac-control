@@ -33,7 +33,7 @@ Take the module out of the indoor unit; work on the unit only with the power off
 
 TX and RX are crossed. The air conditioner connector of the TYJW2 is wired to the alternative UART pins (GPIO13/GPIO15), not to `U0TX`/`U0RX`, so it does not disturb the flashing.
 
-Power: the TYJW2 runs from 5 V through its connector to the indoor unit and has its own 3.3 V regulator. Feed 5 V and GND from the adapter (or another 5 V supply) into these two pins of the connector; determine them with a multimeter as described in the README section "tcl_probe → Hardware", cable colours are not reliable. The 3.3 V pin of most adapters cannot deliver the current peaks of the ESP8266 and leads to aborted transfers.
+Power: the TYJW2 runs from 5 V through its connector to the indoor unit and has its own 3.3 V regulator. Feed 5 V and GND from the adapter (or another 5 V supply) into these two pins of the connector; determine them with a multimeter as described in [tcl-probe.md, Hardware](tcl-probe.md#hardware), cable colours are not reliable. The 3.3 V pin of most adapters cannot deliver the current peaks of the ESP8266 and leads to aborted transfers.
 
 Alternatively the module stays connected to the indoor unit and is powered from it; then only GND, TX and RX go to the adapter.
 
