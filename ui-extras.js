@@ -10,6 +10,8 @@
 // - Every section (and the history) collapses with a click on its header.
 // - The schedule is edited in a resizable text field, one rule per line, next to the list of
 //   the rules with the next switching point in bold.
+// - The setpoint slider of a climate entity gets − and + buttons, one step of the unit each.
+// - A line above the history sums up the operating state: mode, temperatures, fan, vanes.
 // The browser remembers choice, widths and collapsed sections per device.
 const KEY = "esphome-log-hidden";
 const BUTTON = "log-toggle";
@@ -109,6 +111,9 @@ main.flex-grid-half.expanded_entity {
 .flex-grid-half.expanded_logs #${SPLIT} { display: none; }
 @media (width<=1024px) { #${SPLIT} { display: none; } }
 section.offline-lock { opacity: 0.45; filter: grayscale(1); transition: opacity 0.3s; }
+.op-state { margin: 8px 8px 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 16px; font-size: 0.95em; }
+.op-state .op-mode { font-weight: 700; }
+.op-state .op-label { opacity: 0.65; margin-right: 4px; }
 .hist { margin: 0 8px 16px; }
 .hist-head { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .hist-head::before { content: "▾"; display: inline-block; width: 1.2em; }
@@ -252,6 +257,7 @@ function stateListen() {
 		} else if (key === "text/Schedule" || key === "text_sensor/Schedule rules") {
 			scheduleBox();
 		}
+		opState();
 	});
 }
 
@@ -643,9 +649,147 @@ function scheduleNote(box) {
 		: `One rule per line (or separated by ";"), saved when leaving the field · ${n} of 255 characters`;
 }
 
+// Operating state above the history: mode, setpoint, room temperature, fan, vanes.
+// Built from the entities the device has (TCL: "… fixing", Midea: "… louver").
+const MODE_LABELS = { OFF: "Off", HEAT: "Heat", COOL: "Cool", HEAT_COOL: "Heat/Cool", AUTO: "Auto",
+	DRY: "Dry", FAN_ONLY: "Fan only" };
+
+function stateValue(key) {
+	const d = states[key];
+	if (!d) return null;
+	const v = d.value !== undefined && typeof d.value !== "boolean" ? d.value : d.state;
+	return v === undefined || v === null || v === "" ? null : String(v);
+}
+
+function opItems() {
+	const ckey = Object.keys(states).find((k) => k.startsWith("climate/"));
+	const c = ckey && states[ckey];
+	if (!c) return null;
+	const items = [];
+	const mode = c.mode || "";
+	items.push(["", MODE_LABELS[mode] || mode, "op-mode"]);
+	const num = (v) => {
+		const n = parseFloat(v);
+		return isNaN(n) ? null : n;
+	};
+	if (mode !== "OFF" && num(c.target_temperature) !== null) items.push(["Setpoint", `${num(c.target_temperature)} °C`]);
+	if (num(c.current_temperature) !== null) items.push(["Room", `${num(c.current_temperature)} °C`]);
+	if (mode === "OFF") return items;
+	const fan = stateValue("select/Fan speed");
+	if (fan) items.push(["Fan", fan]);
+	const swing = stateValue("select/Swing") || "Off";
+	const swingV = swing === "Vertical" || swing === "Both";
+	const swingH = swing === "Horizontal" || swing === "Both";
+	const v = stateValue("select/Vertical louver") || stateValue("select/Vertical fixing");
+	const h = stateValue("select/Horizontal louver") || stateValue("select/Horizontal fixing");
+	if (swingV) items.push(["Vertical", "swing"]);
+	else if (v) items.push(["Vertical", v]);
+	if (swingH) items.push(["Horizontal", "swing"]);
+	else if (h) items.push(["Horizontal", h]);
+	return items;
+}
+
+function opState() {
+	const r = root();
+	const table = r && r.querySelector("esp-entity-table");
+	const items = table && opItems();
+	if (!items) return;
+	let line = r.querySelector(".op-state");
+	if (!line) {
+		line = document.createElement("div");
+		line.className = "op-state";
+	}
+	// directly above the history, or above the entities without history
+	const anchor = r.querySelector(".hist") || table;
+	if (line.nextElementSibling !== anchor) anchor.before(line);
+	line.innerHTML = "";
+	for (const [label, value, cls] of items) {
+		const span = document.createElement("span");
+		if (cls) span.className = cls;
+		if (label) {
+			const l = document.createElement("span");
+			l.className = "op-label";
+			l.textContent = label;
+			span.appendChild(l);
+		}
+		span.appendChild(document.createTextNode(value));
+		line.appendChild(span);
+	}
+}
+
+// − and + next to the setpoint slider of climate entities. Several clicks add up and are sent
+// together 0.6 s after the last one.
+const STEP_STYLE = `
+.setpoint-step { width: 28px; height: 28px; margin: 0 6px; border-radius: 50%; padding: 0;
+	border: 1px solid rgba(127, 127, 127, 0.6); background: transparent; color: inherit;
+	font-size: 18px; line-height: 1; cursor: pointer; align-self: center; flex: none; }
+.setpoint-step:hover { border-color: rgba(3, 169, 244, 0.9); }
+`;
+const SETPOINT_FIELDS = { "Target:": "target_temperature", "Target Low:": "target_temperature_low",
+	"Target High:": "target_temperature_high" };
+const setpointPending = {};
+
+function setpointStep(key, field, dir) {
+	const d = states[key];
+	if (!d) return;
+	const step = parseFloat(d.step) || 0.5;
+	const id = key + "|" + field;
+	const pending = setpointPending[id];
+	let v = pending ? pending.value : parseFloat(d[field]);
+	if (isNaN(v)) return;
+	v = Math.round((v + dir * step) / step) * step;
+	const lo = parseFloat(d.min_temp), hi = parseFloat(d.max_temp);
+	if (!isNaN(lo)) v = Math.max(lo, v);
+	if (!isNaN(hi)) v = Math.min(hi, v);
+	v = Math.round(v * 10) / 10;
+	if (pending) clearTimeout(pending.timer);
+	setpointPending[id] = {
+		value: v,
+		timer: setTimeout(() => {
+			delete setpointPending[id];
+			post(key, "set", `${field}=${v}`).catch(() => {});
+		}, 600),
+	};
+	// show the new value right away on the slider
+	const r = root();
+	const table = r && r.querySelector("esp-entity-table");
+	const slider = table && table.shadowRoot.querySelector(`[data-setpoint="${CSS.escape(id)}"]`);
+	if (slider) slider.value = v;
+}
+
+function setpointButtons() {
+	const r = root();
+	const table = r && r.querySelector("esp-entity-table");
+	const sr = table && table.shadowRoot;
+	if (!sr) return;
+	sr.querySelectorAll(".climate-row").forEach((row) => {
+		const label = row.querySelector("label");
+		const slider = row.querySelector("esp-range-slider");
+		const field = label && SETPOINT_FIELDS[label.textContent.trim()];
+		const entity = row.closest(".entity-row");
+		if (!field || !slider || !entity || row.querySelector(".setpoint-step")) return;
+		style(sr, "step-style", STEP_STYLE);
+		const name = entity.children[1] && entity.children[1].textContent.trim();
+		const key = "climate/" + name;
+		slider.dataset.setpoint = key + "|" + field;
+		const make = (text, dir) => {
+			const b = document.createElement("button");
+			b.className = "setpoint-step";
+			b.textContent = text;
+			b.title = dir < 0 ? "lower" : "higher";
+			b.addEventListener("click", () => setpointStep(key, field, dir));
+			return b;
+		};
+		slider.before(make("−", -1));
+		slider.after(make("+", 1));
+	});
+}
+
 function setup() {
 	button();
 	stateListen();
+	setpointButtons();
+	opState();
 	powerButton();
 	sections();
 	scheduleBox();

@@ -152,6 +152,15 @@ climate:
       - HEAT
       - DRY
       - FAN_ONLY
+    supported_swing_modes:
+      - VERTICAL
+      - HORIZONTAL
+      - BOTH
+    # without this list the climate component rejects Silent and Turbo and stays on the
+    # current fan speed; the component takes them only from here, not from autoconf
+    custom_fan_modes:
+      - SILENT
+      - TURBO
     beeper: true
     outdoor_temperature:
       name: Outdoor temperature
@@ -359,21 +368,29 @@ script:
                 ESP_LOGW("louver", "Unit does not report the chosen vane positions, giving up");
                 return false;
               }
-              if (id(louver_tries) == 0) return id(louver_v_want) > 0 || id(louver_h_want) > 0;
+              // a swinging axis keeps swinging, its fixed position is not sent
+              auto sw = id(bosch_climate).swing_mode;
+              int want_v = (sw == climate::CLIMATE_SWING_VERTICAL || sw == climate::CLIMATE_SWING_BOTH) ? 0 : id(louver_v_want);
+              int want_h = (sw == climate::CLIMATE_SWING_HORIZONTAL || sw == climate::CLIMATE_SWING_BOTH) ? 0 : id(louver_h_want);
+              if (id(louver_tries) == 0) return want_v > 0 || want_h > 0;
               // done when every chosen position was reported after the last command
               auto ok = [](int want, int seen, uint32_t seen_ms) {
                 return want <= 0 || (seen == values[want - 1] && (int32_t) (seen_ms - id(louver_sent_ms)) > 0);
               };
-              return !(ok(id(louver_v_want), id(louver_v_seen), id(louver_v_seen_ms)) &&
-                       ok(id(louver_h_want), id(louver_h_seen), id(louver_h_seen_ms)));
+              return !(ok(want_v, id(louver_v_seen), id(louver_v_seen_ms)) &&
+                       ok(want_h, id(louver_h_seen), id(louver_h_seen_ms)));
           then:
             - lambda: |-
                 id(louver_tries)++;
                 id(louver_sent_ms) = millis();
-                if (id(louver_v_want) > 0) id(vertical_louver).make_call().set_index(id(louver_v_want)).perform();
+                auto sw = id(bosch_climate).swing_mode;
+                if (id(louver_v_want) > 0 && sw != climate::CLIMATE_SWING_VERTICAL && sw != climate::CLIMATE_SWING_BOTH)
+                  id(vertical_louver).make_call().set_index(id(louver_v_want)).perform();
             - delay: 1500ms
             - lambda: |-
-                if (id(louver_h_want) > 0) id(horizontal_louver).make_call().set_index(id(louver_h_want)).perform();
+                auto sw = id(bosch_climate).swing_mode;
+                if (id(louver_h_want) > 0 && sw != climate::CLIMATE_SWING_HORIZONTAL && sw != climate::CLIMATE_SWING_BOTH)
+                  id(horizontal_louver).make_call().set_index(id(louver_h_want)).perform();
             - delay: 30s
 
 switch:
@@ -422,17 +439,37 @@ button:
     on_press:
       - script.execute: display_toggle
       - lambda: id(bosch_display_assumed) = !id(bosch_display_assumed);
-  # move the vanes one step, like a short press of the swing button
-  - platform: template
-    name: Swing step
-    icon: mdi:arrow-oscillating
-    on_press:
-      - midea_ac.swing_step:
 
 # fan speed as a separate select, because the climate card of the web interface
-# shows no fan modes. Silent and Turbo are Midea custom fan modes
-# and only offered if the unit reports them via autoconf.
+# shows no fan modes. Silent and Turbo are Midea custom fan modes (custom_fan_modes above).
 select:
+  # swing on/off, because the climate card of the web interface shows no swing modes;
+  # follows the climate component, also when switched by remote control
+  - platform: template
+    name: Swing
+    id: swing_select
+    icon: mdi:arrow-oscillating
+    options:
+      - "Off"
+      - "Vertical"
+      - "Horizontal"
+      - "Both"
+    update_interval: 2s
+    lambda: |-
+      switch (id(bosch_climate).swing_mode) {
+        case climate::CLIMATE_SWING_VERTICAL: return std::string("Vertical");
+        case climate::CLIMATE_SWING_HORIZONTAL: return std::string("Horizontal");
+        case climate::CLIMATE_SWING_BOTH: return std::string("Both");
+        default: return std::string("Off");
+      }
+    set_action:
+      - lambda: |-
+          auto call = id(bosch_climate).make_call();
+          if (x == "Vertical") call.set_swing_mode(climate::CLIMATE_SWING_VERTICAL);
+          else if (x == "Horizontal") call.set_swing_mode(climate::CLIMATE_SWING_HORIZONTAL);
+          else if (x == "Both") call.set_swing_mode(climate::CLIMATE_SWING_BOTH);
+          else call.set_swing_mode(climate::CLIMATE_SWING_OFF);
+          call.perform();
   - platform: template
     name: Fan speed
     id: fan_speed

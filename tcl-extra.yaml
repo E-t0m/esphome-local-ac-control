@@ -308,3 +308,32 @@ text_sensor:
     name: Unknown status bytes
     entity_category: diagnostic
     update_interval: never
+
+select:
+  # swing on/off, because the climate card of the web interface shows no swing modes;
+  # follows the climate component, also when switched by remote control
+  - platform: template
+    name: Swing
+    id: swing_select
+    icon: mdi:arrow-oscillating
+    options:
+      - "Off"
+      - "Vertical"
+      - "Horizontal"
+      - "Both"
+    update_interval: 2s
+    lambda: |-
+      switch (id(${device_name}climate).swing_mode) {
+        case climate::CLIMATE_SWING_VERTICAL: return std::string("Vertical");
+        case climate::CLIMATE_SWING_HORIZONTAL: return std::string("Horizontal");
+        case climate::CLIMATE_SWING_BOTH: return std::string("Both");
+        default: return std::string("Off");
+      }
+    set_action:
+      - lambda: |-
+          auto call = id(${device_name}climate).make_call();
+          if (x == "Vertical") call.set_swing_mode(climate::CLIMATE_SWING_VERTICAL);
+          else if (x == "Horizontal") call.set_swing_mode(climate::CLIMATE_SWING_HORIZONTAL);
+          else if (x == "Both") call.set_swing_mode(climate::CLIMATE_SWING_BOTH);
+          else call.set_swing_mode(climate::CLIMATE_SWING_OFF);
+          call.perform();

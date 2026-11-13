@@ -25,7 +25,7 @@ TCL units use the component [tclac](https://github.com/I-am-nightingale/tclac), 
 | `schedule.yaml`, `schedule.h` | schedules as a text field, time via NTP, switch "Power" |
 | `setpoint-guidance.yaml` | self-learning setpoint guidance for heating |
 | `standalone.yaml` | select "Reboot without API client", button "Reboot" |
-| `tcl-extra.yaml` | additional values from the TCL status frames (compressor frequency, estimated power, timers, energy, unknown bytes) |
+| `tcl-extra.yaml` | additional values from the TCL status frames (compressor frequency, estimated power, timers, energy, unknown bytes), select "Swing" |
 | `tcl-protocol.yaml` | raw UART access for `tcl_probe.py` |
 | `history.yaml`, `history.h` | history in RAM with growing interval (1 s up to 64 s, about 10.7 hours), shown as a chart in the web interface |
 | `ui-extras.js` | extras for the web interface: power button, collapsible log, adjustable column width, lock while offline |
@@ -82,6 +82,8 @@ web_server:
 - the device name at the top reloads the page when clicked, e.g. after an update
 - with `history.yaml` on the device, a history chart above the entities (see below); it fills the width and compresses as the history grows
 - every section (and the history) folds with a click on its header; the browser remembers which ones are folded
+- a line above the history with the operating state: mode, setpoint, room temperature, fan speed, vanes or swing
+- − and + buttons next to the setpoint slider, one step of the unit each (1 °C on TCL, 0.5 °C on Midea); several clicks are sent together 0.6 s after the last one
 - with `schedule.yaml` on the device, a resizable text field for the schedule with one rule per line, next to it the rules as the device understood them, the next switching point in bold
 
 The browser remembers these settings per device.
@@ -139,6 +141,8 @@ All parameters are set in the web interface:
 
 ## TCL: compressor frequency and estimated power
 
+The climate card of the web interface shows no swing modes; the select "Swing" (`tcl-extra.yaml` on TCL units, `klima-bosch.yaml` on Midea units) switches swing off, vertical, horizontal or both and follows the unit, also when it is switched by remote control.
+
 Byte 39 of the TCL status frame is the compressor frequency in Hz (0 = compressor stopped). `tcl-extra.yaml` shows it as "Compressor frequency" and, for comparison, as hex and decimal in "Compressor byte 39".
 
 "Estimated power" calculates the electrical power of the whole unit from it:
@@ -169,10 +173,10 @@ The Bosch Climate 4000i is built by Midea; it is the Midea Xtreme Save, model co
 | Entity | Meaning |
 |---|---|
 | Climate | mode, setpoint (0.5 °C steps); Heat/Cool, Heat, Cool, Dry and Fan only are always offered, because the autoconf report of the 4000i does not always contain heating |
-| Fan speed | select Auto, Low, Medium, High, Silent, Turbo (Silent and Turbo only if the unit reports them), since the climate card of the web interface shows no fan modes |
+| Fan speed | select Auto, Low, Medium, High, Silent, Turbo, since the climate card of the web interface shows no fan modes; Silent and Turbo are declared in the configuration, the component does not take them from the capability report of the unit |
 | Vertical louver, Horizontal louver | fixed vane position in five steps or "Last position"; the select shows the position reported by the unit |
 | Louver restore delay | after switching on, the chosen positions are sent again after this time (default 15 s) and then every 30 s until the unit reports them, at most 10 times; while heating starts, the unit keeps the vanes in its own position for a while and ignores commands |
-| Swing step | moves the vanes one step, like a short press of the swing button |
+| Swing | Off, Vertical, Horizontal, Both; a swinging axis is left out when the fixed positions are sent again after switching on |
 | Beeper, Display, Toggle display | beeper on/off, display of the indoor unit on/off; the unit only knows "toggle", so the switch "Display" remembers the state after its last command. After switching the display with the remote control, "Toggle display" brings switch and display in line again. |
 | Compressor frequency, Outdoor unit power | from the diagnostic data of the unit |
 | Indoor fan speed, Indoor fan target speed, Outdoor fan speed | fan speeds in rpm, so the current stage is visible in fan mode auto |
@@ -198,12 +202,14 @@ The defaults (12 W, 66 W, 1.13) were measured on the CL4000i 26 E in heating mod
 
 ## Panel for all units
 
-`ac-panel.py` runs on a Linux computer in the home network and serves one page for all units: on/off and setpoint per unit, with room temperature and mode. It keeps the event stream of each module open and sends the commands through their REST interface; the passwords of the modules stay on this computer. It needs Python 3 with PyYAML (`sudo apt install python3-yaml`) and the switch "Power" (`schedule.yaml`) on each module.
+`ac-panel.py` runs on a Linux computer in the home network and serves one page for all units: on/off and setpoint per unit, with mode, room temperature, fan speed and vanes; the name of a unit links to its own web interface. It keeps the event stream of each module open and sends the commands through their REST interface; the passwords of the modules stay on this computer. It needs Python 3 with PyYAML (`sudo apt install python3-yaml`) and the switch "Power" (`schedule.yaml`) on each module.
 
 ```bash
 cp ac-panel.example.yaml ac-panel.yaml
 python3 ac-panel.py
 ```
+
+<img src="docs/ac-panel.png" width="400" alt="Panel for all units">
 
 Enter the units in `ac-panel.yaml` (name, host name or IP, password from `secrets.yaml`) and open `http://COMPUTER:8080`. `panel_password` protects the page itself (user `admin`); without this line the page is open to everyone in the network. A setpoint changed with − and + is sent 0.8 s after the last click, in the step of the unit (1 °C on TCL, 0.5 °C on Midea).
 

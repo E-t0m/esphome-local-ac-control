@@ -59,6 +59,17 @@ def load_config():
 	return yaml.load(CONFIG.read_text(encoding="utf-8"), Loader=Loader)
 
 
+# further entities shown on the page (TCL: "… fixing", Midea: "… louver")
+DETAILS = {
+	"select/Fan speed": "fan",
+	"select/Swing": "swing",
+	"select/Vertical louver": "vane_v",
+	"select/Vertical fixing": "vane_v",
+	"select/Horizontal louver": "vane_h",
+	"select/Horizontal fixing": "vane_h",
+}
+
+
 class Device:
 	"""One air conditioner: keeps an event stream open and caches climate and power state."""
 
@@ -100,6 +111,9 @@ class Device:
 			elif domain == "switch" and key.split("/")[-1] == "Power":
 				self.power = self.path(key)
 				self.state["power"] = d.get("value") is True or d.get("state") == "ON"
+			elif key in DETAILS:
+				v = d.get("value") if domain == "sensor" else d.get("state", d.get("value"))
+				self.state[DETAILS[key]] = v
 
 	def listen(self):
 		last = None  # last error, logged only when it changes
@@ -156,7 +170,7 @@ class Device:
 	def snapshot(self):
 		with self.lock:
 			s = dict(self.state)
-		s.update(name=self.name, online=self.online, has_power=self.power is not None)
+		s.update(name=self.name, url=self.base + "/", online=self.online, has_power=self.power is not None)
 		return s
 
 
@@ -177,8 +191,14 @@ main { max-width: 520px; margin: 0 auto; display: grid; gap: 12px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
 	display: grid; grid-template-columns: 1fr auto; gap: 10px 12px; align-items: center; }
 .card.offline { opacity: 0.5; }
-.name { font-weight: 600; font-size: 1.1em; }
-.info { color: var(--dim); font-size: 0.9em; grid-column: 1; }
+.name { font-weight: 600; font-size: 1.1em; color: inherit; text-decoration: none; }
+a.name:hover { text-decoration: underline; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 24px; grid-column: 1; }
+.info { color: var(--dim); font-size: 0.9em; }
+.info .mode { color: var(--fg); font-weight: 600; }
+.detail { color: var(--dim); font-size: 0.85em; grid-column: 1; }
+.detail:empty { display: none; }
+.card.nodetail .power { grid-row: 1; }
 .power { width: 52px; height: 52px; border-radius: 50%; border: 2px solid var(--line); background: none;
 	color: var(--dim); cursor: pointer; grid-row: 1 / span 2; grid-column: 2; }
 .power svg { width: 28px; height: 28px; display: block; margin: auto; }
@@ -195,6 +215,8 @@ button:disabled { opacity: 0.4; cursor: default; }
 <script>
 const POWER_ICON = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16.56,5.44L15.11,6.89C16.84,7.94 18,9.83 18,12A6,6 0 0,1 12,18A6,6 0 0,1 6,12C6,9.83 7.16,7.94 8.88,6.88L7.44,5.44C5.36,6.88 4,9.28 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12C20,9.28 18.64,6.88 16.56,5.44M13,3H11V13H13"/></svg>';
 let devices = [];
+const MODES = { OFF: "Off", HEAT: "Heat", COOL: "Cool", HEAT_COOL: "Heat/Cool", AUTO: "Auto", DRY: "Dry",
+	FAN_ONLY: "Fan only" };
 // setpoint changed on the page, sent after a short pause so that several clicks make one request
 const pending = {};
 
@@ -211,8 +233,8 @@ function render() {
 			card = document.createElement("section");
 			card.id = "dev" + i;
 			card.className = "card";
-			card.innerHTML = `<div class="name"></div><button class="power" title="On / off">${POWER_ICON}</button>
-				<div class="info"></div>
+			card.innerHTML = `<div class="head"><a class="name" target="_blank" rel="noopener"></a><span class="info"></span></div>
+				<button class="power" title="On / off">${POWER_ICON}</button><div class="detail"></div>
 				<div class="temp"><button class="down">&minus;</button><span class="value"></span><button class="up">+</button></div>`;
 			card.querySelector(".power").onclick = () => power(i);
 			card.querySelector(".down").onclick = () => step(i, -1);
@@ -221,11 +243,32 @@ function render() {
 		}
 		const on = d.power === true;
 		card.classList.toggle("offline", !d.online);
-		card.querySelector(".name").textContent = d.name;
+		const name = card.querySelector(".name");
+		name.textContent = d.name;
+		name.href = d.url;
+		name.title = "Web interface of " + d.name;
 		const room = num(d.current_temperature);
-		const mode = d.mode ? d.mode.replace("_", " ").toLowerCase() : "";
-		card.querySelector(".info").textContent = !d.online ? "no connection"
-			: [room !== null ? `room ${room} °C` : "", on ? mode : "off"].filter(x => x).join(" · ");
+		const mode = MODES[d.mode] || d.mode || "";
+		const info = card.querySelector(".info");
+		if (!d.online) {
+			info.textContent = "no connection";
+		} else {
+			info.innerHTML = "";
+			const m = document.createElement("span");
+			m.className = "mode";
+			m.textContent = on ? mode : "Off";
+			info.appendChild(m);
+			if (room !== null) info.appendChild(document.createTextNode(` · room ${room}\u00a0°C`));
+		}
+		const swing = d.swing || "Off";
+		const vane = (axis, value, swings) => swings ? `${axis} swing` : value ? `${axis} ${value}` : "";
+		const detail = card.querySelector(".detail");
+		detail.textContent = !d.online || !on ? "" : [
+			d.fan ? `Fan ${d.fan}` : "",
+			vane("Vertical", d.vane_v, swing === "Vertical" || swing === "Both"),
+			vane("Horizontal", d.vane_h, swing === "Horizontal" || swing === "Both"),
+		].filter(x => x).join(" · ");
+		card.classList.toggle("nodetail", !detail.textContent);
 		const pb = card.querySelector(".power");
 		pb.classList.toggle("on", on);
 		pb.disabled = !d.online || !d.has_power;
