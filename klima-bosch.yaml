@@ -294,7 +294,7 @@ number:
     mode: box
     optimistic: true
     restore_value: true
-    initial_value: 1.13
+    initial_value: 1.20
   - platform: template
     id: bosch_power_offset
     name: Power offset
@@ -307,7 +307,7 @@ number:
     mode: box
     optimistic: true
     restore_value: true
-    initial_value: 66
+    initial_value: 64
   - platform: template
     id: bosch_power_idle
     name: Power idle
@@ -320,7 +320,7 @@ number:
     mode: box
     optimistic: true
     restore_value: true
-    initial_value: 12
+    initial_value: 11
 
 # send the chosen vane positions again after switching on, after "Louver restore delay".
 # While heating starts, the unit keeps the vanes in its own position and ignores commands

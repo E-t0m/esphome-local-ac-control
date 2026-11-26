@@ -152,7 +152,7 @@ Byte 39 of the TCL status frame is the compressor frequency in Hz (0 = compresso
 | 0 Hz | "Power idle" |
 | above 0 Hz | "Power offset" + "Power per Hz" × frequency |
 
-The defaults (29 W, −50 W, 18.3 W/Hz) were measured on the Euromate 482255 (TCL TAC-09CHSD/XA71I) in heating mode with fan auto; they match the rating plate (heating 240–1552 W, 699 W rated), whose minimum of 240 W corresponds to about 16 Hz; single values deviate by about ±15 % depending on temperatures. The three values can be adjusted in the web interface. "Estimated energy" sums up the energy since the last boot.
+The defaults (idle 14 W, offset 12 W, 15.3 W/Hz) are fitted to about 15,000 minute values of a power meter on two TCL TAC-09CHSD/XA71I units (one of them sold as Euromate 482255) in heating mode, at outdoor temperatures from −6 to +14 °C and 16 to 64 Hz; the meter measured both units together, so idle and offset are split evenly. Over these twelve days the estimated energy deviates by +2 % from the measured one, single minute values by about 25 W. At the same frequency the power rises by about 5 W per °C of outdoor temperature; the TCL status frame provides no outdoor temperature, so the formula leaves this out. The three values can be adjusted in the web interface. "Estimated energy" sums up the energy since the last boot.
 
 ## History
 
@@ -198,7 +198,7 @@ The Bosch Climate 4000i reports "Outdoor unit power", which covers only part of 
 | stopped | "Power idle" |
 | running | "Power offset" + "Power factor" × outdoor unit power |
 
-The defaults (12 W, 66 W, 1.13) were measured on the CL4000i 26 E in heating mode with fan auto and match a power meter within about 10 W at steady load. "Total energy" sums up the energy since the last boot.
+The defaults (idle 11 W, 64 W, factor 1.20) are fitted to about 13,000 minute values of a power meter on the CL4000i 26 E in heating mode with fan auto, at outdoor temperatures from −5 to +14 °C. Over these twelve days the estimated energy is 5 % below the measured one: at outdoor temperatures around −1 °C the stopped unit sometimes draws about 34 W instead of 11 W, presumably for a heater in the outdoor unit, which the formula does not cover. "Total energy" sums up the energy since the last boot.
 
 ## Panel for all units
 

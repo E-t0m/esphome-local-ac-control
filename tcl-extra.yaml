@@ -254,7 +254,7 @@ number:
     mode: box
     optimistic: true
     restore_value: true
-    initial_value: 18.3
+    initial_value: 15.3
   - platform: template
     id: tcl_power_offset
     name: Power offset
@@ -267,7 +267,7 @@ number:
     mode: box
     optimistic: true
     restore_value: true
-    initial_value: -50
+    initial_value: 12
   - platform: template
     id: tcl_power_idle
     name: Power idle
@@ -280,7 +280,7 @@ number:
     mode: box
     optimistic: true
     restore_value: true
-    initial_value: 29
+    initial_value: 14
 
 binary_sensor:
   - platform: template

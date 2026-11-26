@@ -251,6 +251,7 @@ function stateListen() {
 		if (key === "switch-power") key = "switch/Power";
 		if (!key.includes("/")) return;
 		states[key] = d;
+		if (key.startsWith("climate/")) setTimeout(setpointHold, 50);
 		if (key === "switch/Power") {
 			power = { path: key, on: d.value === true || d.state === "ON" };
 			powerButton();
@@ -728,33 +729,74 @@ const STEP_STYLE = `
 const SETPOINT_FIELDS = { "Target:": "target_temperature", "Target Low:": "target_temperature_low",
 	"Target High:": "target_temperature_high" };
 const setpointPending = {};
+// after sending, the new value counts for this long even if the device still reports the old
+// one: a status report that was already on its way must not undo the click (Midea units)
+const SETPOINT_HOLD_MS = 8000;
+
+function setpointSlider(id) {
+	const r = root();
+	const table = r && r.querySelector("esp-entity-table");
+	return table && table.shadowRoot.querySelector(`[data-setpoint="${CSS.escape(id)}"]`);
+}
+
+// value to show and to count from: a recent click, otherwise the device's state
+function setpointCurrent(key, field) {
+	const p = setpointPending[key + "|" + field];
+	if (p && (p.timer || Date.now() - p.at < SETPOINT_HOLD_MS)) return p.value;
+	const d = states[key];
+	return d ? parseFloat(d[field]) : NaN;
+}
+
+function setpointSend(key, field, entry, tries) {
+	const id = key + "|" + field;
+	entry.timer = null;
+	entry.at = Date.now();
+	post(key, "set", `${field}=${entry.value}`).catch(() => {});
+	// not taken over after 3 s: send again, at most twice
+	entry.check = setTimeout(() => {
+		if (setpointPending[id] !== entry) return;
+		const cur = parseFloat(states[key] && states[key][field]);
+		if (cur !== entry.value && tries < 2) setpointSend(key, field, entry, tries + 1);
+	}, 3000);
+}
 
 function setpointStep(key, field, dir) {
 	const d = states[key];
 	if (!d) return;
 	const step = parseFloat(d.step) || 0.5;
 	const id = key + "|" + field;
-	const pending = setpointPending[id];
-	let v = pending ? pending.value : parseFloat(d[field]);
+	let v = setpointCurrent(key, field);
 	if (isNaN(v)) return;
 	v = Math.round((v + dir * step) / step) * step;
 	const lo = parseFloat(d.min_temp), hi = parseFloat(d.max_temp);
 	if (!isNaN(lo)) v = Math.max(lo, v);
 	if (!isNaN(hi)) v = Math.min(hi, v);
 	v = Math.round(v * 10) / 10;
-	if (pending) clearTimeout(pending.timer);
-	setpointPending[id] = {
-		value: v,
-		timer: setTimeout(() => {
-			delete setpointPending[id];
-			post(key, "set", `${field}=${v}`).catch(() => {});
-		}, 600),
-	};
+	const old = setpointPending[id];
+	if (old) {
+		clearTimeout(old.timer);
+		clearTimeout(old.check);
+	}
+	const entry = { value: v, at: Date.now() };
+	entry.timer = setTimeout(() => setpointSend(key, field, entry, 0), 600);
+	setpointPending[id] = entry;
 	// show the new value right away on the slider
-	const r = root();
-	const table = r && r.querySelector("esp-entity-table");
-	const slider = table && table.shadowRoot.querySelector(`[data-setpoint="${CSS.escape(id)}"]`);
+	const slider = setpointSlider(id);
 	if (slider) slider.value = v;
+}
+
+// keep the slider on a recent click while the device still reports the old value
+function setpointHold() {
+	for (const id of Object.keys(setpointPending)) {
+		const [key, field] = id.split("|");
+		const p = setpointPending[id];
+		if (!p.timer && Date.now() - p.at >= SETPOINT_HOLD_MS) {
+			delete setpointPending[id];
+			continue;
+		}
+		const slider = setpointSlider(id);
+		if (slider && parseFloat(slider.value) !== p.value) slider.value = p.value;
+	}
 }
 
 function setpointButtons() {
@@ -789,6 +831,7 @@ function setup() {
 	button();
 	stateListen();
 	setpointButtons();
+	setpointHold();
 	opState();
 	powerButton();
 	sections();
