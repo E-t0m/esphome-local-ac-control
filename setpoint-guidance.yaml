@@ -22,9 +22,11 @@
 globals:
   # learned values in one stored block (the settings storage of the ESP8266 is small):
   # stop offset, number of stops, restart offset, number of restarts
+  # setup_priority 999: second place in the settings storage, after the schedules
   - id: guide_learn
     type: float[4]
     restore_value: true
+    setup_priority: 999
     initial_value: "{0, 0, 0, 0}"
   # setpoint last set by the module and when (millis)
   - id: guide_last_set

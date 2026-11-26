@@ -38,11 +38,13 @@ globals:
   - id: wifi_last_seen
     type: uint32_t
     initial_value: "0"
-  # rebooted for lost WiFi; no further reboot until the WiFi was back
+  # rebooted for lost WiFi; no further reboot until the WiFi was back.
+  # setup_priority -1000: stored after all older settings, so it does not move them
   - id: wifi_reboot_done
     type: bool
     restore_value: true
     initial_value: "false"
+    setup_priority: -1000
 
 select:
   - platform: template
@@ -76,6 +78,8 @@ select:
     initial_option: "15 min"
     optimistic: true
     restore_value: true
+    # stored after all older settings, so it does not move them
+    setup_priority: -1000
 
 interval:
   - interval: 10s

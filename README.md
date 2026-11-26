@@ -249,6 +249,12 @@ A pending switching point postpones both reboots until it has been executed.
 
 On the ESP8266, the diagnostic value "Settings storage" shows how much of the 128 words (512 bytes) for stored settings is in use. Settings that no longer fit are silently not stored, so it should stay below 128.
 
+The ESP8266 assigns the places in this storage in setup order, without names. A stored setting that is added or removed shifts all that follow it, and after the update these come back with their default values. Therefore:
+
+- the packed schedules (`setup_priority: 1000`), the learned values of the setpoint guidance (`999`) and the last used mode for `on` (`998`) are set up first and keep their places;
+- a stored setting added later gets `setup_priority: -1000`, so it is placed after all existing ones;
+- before an update that adds or removes stored settings, note the settings or take a screenshot of the web interface.
+
 Control through REST, with digest authentication:
 
 ```bash

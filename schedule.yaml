@@ -52,10 +52,15 @@ globals:
     type: int
     restore_value: true
     initial_value: "-1"
-  # the rules, packed by schedule::pack()
+    # third place in the settings storage, after the schedules and the learned guidance values
+    setup_priority: 998
+  # the rules, packed by schedule::pack(). setup_priority 1000: set up before all other stored
+  # settings, so it keeps the first place in the settings storage of the ESP8266, which is
+  # assigned in setup order (see README, "Settings storage")
   - id: sched_store
     type: uint32_t[20]
     restore_value: true
+    setup_priority: 1000
     initial_value: "{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}"
   # stored rules loaded after boot; until then the text field is not parsed
   - id: sched_loaded
