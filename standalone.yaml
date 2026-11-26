@@ -1,5 +1,5 @@
-# Select "Reboot without API client" and button "Reboot" for ESPHome devices
-# running without Home Assistant.
+# Selects "Reboot without API client" and "Reboot without WiFi", button "Reboot" for ESPHome
+# devices running without Home Assistant.
 # Include under packages:
 #   standalone: !include standalone.yaml
 # YAML does not allow tabs, hence indentation with spaces.
@@ -7,7 +7,11 @@
 # The device reboots when no client (Home Assistant, esphome logs) has been connected to the API
 # for a certain time. The select sets this time, "Never" (default) disables the reboot.
 # The choice survives reboots.
-# While reboot_hold is set (e.g. by schedule.yaml before a switching point), the reboot waits.
+# "Reboot without WiFi" reboots once when the WiFi connection has been lost for the selected
+# time; ESPHome itself does not reboot while its fallback hotspot is configured. Another reboot
+# follows only after the WiFi was back in between, because without WiFi there is no time server
+# and the clock (and with it the schedules) starts only with the next connection.
+# While reboot_hold is set (e.g. by schedule.yaml before a switching point), the reboots wait.
 # The button "Reboot" reboots the device immediately.
 # On the ESP8266, "Settings storage" shows how much of the 512-byte storage for stored settings
 # is in use; settings that no longer fit are not stored at all.
@@ -30,6 +34,15 @@ globals:
   - id: api_last_seen
     type: uint32_t
     initial_value: "0"
+  # last time (millis) with a WiFi connection
+  - id: wifi_last_seen
+    type: uint32_t
+    initial_value: "0"
+  # rebooted for lost WiFi; no further reboot until the WiFi was back
+  - id: wifi_reboot_done
+    type: bool
+    restore_value: true
+    initial_value: "false"
 
 select:
   - platform: template
@@ -47,6 +60,20 @@ select:
       - "12 h"
       - "24 h"
     initial_option: "Never"
+    optimistic: true
+    restore_value: true
+  - platform: template
+    name: Reboot without WiFi
+    id: wifi_reboot_timeout
+    entity_category: config
+    icon: mdi:wifi-off
+    options:
+      - "Never"
+      - "5 min"
+      - "15 min"
+      - "30 min"
+      - "1 h"
+    initial_option: "15 min"
     optimistic: true
     restore_value: true
 
@@ -72,6 +99,32 @@ interval:
             return;
           }
           ESP_LOGW("standalone", "No API client for %u min, rebooting", (unsigned) minutes[i]);
+          App.safe_reboot();
+  - interval: 10s
+    then:
+      - lambda: |-
+          // minutes per option, 0 = no reboot
+          static const uint32_t minutes[] = {0, 5, 15, 30, 60};
+          static bool told = false;
+          const uint32_t now = millis();
+          if (wifi::global_wifi_component == nullptr) return;
+          if (wifi::global_wifi_component->is_connected()) {
+            id(wifi_last_seen) = now;
+            if (id(wifi_reboot_done)) id(wifi_reboot_done) = false;
+            told = false;
+            return;
+          }
+          const size_t i = id(wifi_reboot_timeout).active_index().value_or(0);
+          if (i == 0 || i >= sizeof(minutes) / sizeof(minutes[0]) || id(wifi_reboot_done)) return;
+          if (now - id(wifi_last_seen) < minutes[i] * 60000UL) return;
+          if (id(reboot_hold)) {
+            if (!told) ESP_LOGI("standalone", "Reboot without WiFi waits for the next switching point");
+            told = true;
+            return;
+          }
+          ESP_LOGW("standalone", "No WiFi for %u min, rebooting", (unsigned) minutes[i]);
+          // stored by the globals component on shutdown
+          id(wifi_reboot_done) = true;
           App.safe_reboot();
 
 text_sensor:

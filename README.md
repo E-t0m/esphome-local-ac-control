@@ -24,7 +24,7 @@ TCL units use the component [tclac](https://github.com/I-am-nightingale/tclac), 
 |---|---|
 | `schedule.yaml`, `schedule.h` | schedules as a text field, time via NTP, switch "Power" |
 | `setpoint-guidance.yaml` | self-learning setpoint guidance for heating |
-| `standalone.yaml` | select "Reboot without API client", button "Reboot" |
+| `standalone.yaml` | selects "Reboot without API client" and "Reboot without WiFi", button "Reboot" |
 | `tcl-extra.yaml` | additional values from the TCL status frames (compressor frequency, estimated power, timers, energy, unknown bytes), select "Swing" |
 | `tcl-protocol.yaml` | raw UART access for `tcl_probe.py` |
 | `history.yaml`, `history.h` | history in RAM with growing interval (1 s up to 64 s, about 10.7 hours), shown as a chart in the web interface |
@@ -241,7 +241,11 @@ journalctl --user -u ac-panel -f
 
 ## Running without Home Assistant
 
-ESPHome reboots a device after 15 minutes without an API client. `standalone.yaml` replaces this with the select "Reboot without API client" (`Never`, `15 min` … `24 h`, default `Never`). A pending switching point postpones the reboot until it has been executed.
+ESPHome reboots a device after 15 minutes without an API client. `standalone.yaml` replaces this with the select "Reboot without API client" (`Never`, `15 min` … `24 h`, default `Never`). Only clients of the native API count (Home Assistant, `esphome logs`), not the web interface or `ac-panel.py`.
+
+While a fallback hotspot is configured, ESPHome does not reboot when the WiFi connection is lost. The select "Reboot without WiFi" (`Never`, `5 min` … `1 h`, default `15 min`) reboots once after that time without WiFi. Another reboot follows only after the WiFi was back in between: without WiFi there is no time server, so after a reboot the clock, and with it the schedules, starts only with the next connection.
+
+A pending switching point postpones both reboots until it has been executed.
 
 On the ESP8266, the diagnostic value "Settings storage" shows how much of the 128 words (512 bytes) for stored settings is in use. Settings that no longer fit are silently not stored, so it should stay below 128.
 
