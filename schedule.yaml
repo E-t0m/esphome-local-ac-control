@@ -21,6 +21,9 @@
 # - The rules are stored packed (at most 10), not as text, because the settings storage of the
 #   ESP8266 is only 512 bytes. After a reboot the text field shows them in the same format;
 #   invalid rules are not stored.
+# - A "keep" rule while the unit is off sets temperature, fan speed and vanes only when the unit
+#   is switched on the next time (by button, remote control or rule), because units like TCL
+#   ignore them while off.
 # - The switch "Power" switches the unit off, or on again with the last used mode; setpoint,
 #   fan speed and vanes stay as the unit has them. ui-extras.js shows it as a button at the
 #   top left of the web interface.
@@ -47,6 +50,20 @@ time:
       - ${ntp_server}
 
 globals:
+  # settings of "keep" rules that came while the unit was off, applied at the next switching on
+  # (not stored, so the settings storage keeps its layout)
+  - id: sched_pend_temp
+    type: float
+    initial_value: "NAN"
+  - id: sched_pend_fan
+    type: int
+    initial_value: "-1"
+  - id: sched_pend_v
+    type: int
+    initial_value: "0"
+  - id: sched_pend_h
+    type: int
+    initial_value: "0"
   # last used mode (climate::ClimateMode), -1 = never switched on
   - id: sched_last_mode
     type: int
@@ -192,6 +209,16 @@ text_sensor:
       return out;
 
 interval:
+  # unit switched on: apply what "keep" rules set while it was off
+  - interval: 2s
+    then:
+      - lambda: |-
+          static bool was_on = true;
+          const bool on = id(${sched_climate}).mode != climate::CLIMATE_MODE_OFF;
+          const bool pending = !std::isnan(id(sched_pend_temp)) || id(sched_pend_fan) >= 0 ||
+                               id(sched_pend_v) > 0 || id(sched_pend_h) > 0;
+          if (on && !was_on && pending) id(sched_pend_apply).execute();
+          was_on = on;
   # remember the mode that "on" switches on with
   - interval: 10s
     then:
@@ -238,6 +265,22 @@ interval:
           }
 
 script:
+  # settings of "keep" rules from the time the unit was off; the pause gives the unit time to
+  # start before the commands
+  - id: sched_pend_apply
+    mode: restart
+    then:
+      - delay: 3s
+      - lambda: |-
+          if (id(${sched_climate}).mode == climate::CLIMATE_MODE_OFF) return;
+          ESP_LOGI("schedule", "Switched on: applying the settings of rules from the time it was off");
+          const float temp = id(sched_pend_temp);
+          const int fan = id(sched_pend_fan), v = id(sched_pend_v), h = id(sched_pend_h);
+          id(sched_pend_temp) = NAN;
+          id(sched_pend_fan) = -1;
+          id(sched_pend_v) = 0;
+          id(sched_pend_h) = 0;
+          id(sched_run).execute((int) schedule::SCH_KEEP, temp, fan, v, h, -1);
   # after boot: stored rules -> text field (which then parses it); without rules a template
   # without weekdays, which never switches until days are set to x
   - id: sched_load
@@ -332,6 +375,21 @@ script:
       h: int
       disp: int
     then:
+      # remember "keep" settings while the unit is off; a rule that sets a value itself
+      # replaces what is pending for it
+      - lambda: |-
+          const bool off = id(${sched_climate}).mode == climate::CLIMATE_MODE_OFF;
+          if (mode == schedule::SCH_KEEP && off) {
+            if (!std::isnan(temp)) id(sched_pend_temp) = temp;
+            if (fan >= 0) id(sched_pend_fan) = fan;
+            if (v > 0) id(sched_pend_v) = v;
+            if (h > 0) id(sched_pend_h) = h;
+          } else if (mode != schedule::SCH_OFF) {
+            if (!std::isnan(temp)) id(sched_pend_temp) = NAN;
+            if (fan >= 0) id(sched_pend_fan) = -1;
+            if (v > 0) id(sched_pend_v) = 0;
+            if (h > 0) id(sched_pend_h) = 0;
+          }
       # display first, it does not depend on the unit running
       - if:
           condition:

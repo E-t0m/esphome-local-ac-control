@@ -107,7 +107,7 @@ xxxxx__ 6:30 22 heat auto v3; xxxxx__ 8:00 off; _____xx 8:20 21 keep 2
 | display | no | `d0` display of the indoor unit off, `d1` on; with `keep` without changing anything else, e.g. `X 22:00 keep d0` |
 
 - Each rule switches once at its minute. With several rules at the same minute the last one wins.
-- With `keep` and the unit switched off only the target temperature is set.
+- With `keep` and the unit switched off, temperature, fan speed and vanes are remembered and set 3 s after the unit is switched on the next time, by the power button, remote control or a rule; units like TCL ignore a new setpoint while off. The display (`d0`/`d1`) is switched right away. A later rule that sets one of these values itself replaces the remembered one; nothing is remembered across a reboot.
 - After a reboot the last switching point of the past 15 minutes is caught up, unless it was executed before the reboot.
 - "Schedule check" shows `OK, n rules` or the first error, "Schedule syntax" a short guide with the fan words of the device.
 - "Schedule rules" lists the rules one per line with their days and settings, e.g. `Mon–Fri 06:30 · Heat · 22 °C · Fan speed Auto`; the next one starts with `▶ `. In the web interface the list stands next to the text field.
