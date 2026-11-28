@@ -202,7 +202,7 @@ The defaults (idle 11 W, 64 W, factor 1.20) are fitted to about 13,000 minute va
 
 ## Panel for all units
 
-`ac-panel.py` runs on a Linux computer in the home network and serves one page for all units: on/off and setpoint per unit, with mode, room temperature, fan speed and vanes; the name of a unit links to its own web interface. It keeps the event stream of each module open and sends the commands through their REST interface; the passwords of the modules stay on this computer. It needs Python 3 with PyYAML (`sudo apt install python3-yaml`) and the switch "Power" (`schedule.yaml`) on each module.
+`ac-panel.py` runs on a Linux computer in the home network and serves one page for all units: on/off and setpoint per unit, with mode, room temperature, fan speed and vanes; the name of a unit links to its own web interface. A unit without sign of life for 25 s (the modules send one every 10 s) is greyed out and shows how long it has been silent and since when; the service log notes when a unit is back and after how long. It keeps the event stream of each module open and sends the commands through their REST interface; the passwords of the modules stay on this computer. It needs Python 3 with PyYAML (`sudo apt install python3-yaml`) and the switch "Power" (`schedule.yaml`) on each module.
 
 ```bash
 cp ac-panel.example.yaml ac-panel.yaml

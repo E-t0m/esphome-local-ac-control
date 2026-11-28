@@ -70,6 +70,22 @@ DETAILS = {
 }
 
 
+# a module counts as reachable while its last event is at most this old (ping every 10 s)
+SIGN_OF_LIFE_S = 25
+
+
+def duration(seconds):
+	"""Readable duration: 45 s, 12 min, 3 h 5 min, 2 d 4 h"""
+	s = int(seconds)
+	if s < 60:
+		return f"{s} s"
+	if s < 3600:
+		return f"{s // 60} min"
+	if s < 86400:
+		return f"{s // 3600} h {s % 3600 // 60} min"
+	return f"{s // 86400} d {s % 86400 // 3600} h"
+
+
 class Device:
 	"""One air conditioner: keeps an event stream open and caches climate and power state."""
 
@@ -87,6 +103,7 @@ class Device:
 		self.opener = urllib.request.build_opener(*handlers)
 		self.lock = threading.Lock()
 		self.online = False
+		self.last_seen = None  # time of the last event from the module (it sends a ping every 10 s)
 		self.climate = None  # REST path, e.g. "climate/Climate"
 		self.power = None  # REST path of the switch "Power"
 		self.state = {}
@@ -119,7 +136,8 @@ class Device:
 		last = None  # last error, logged only when it changes
 		while True:
 			try:
-				with self.opener.open(f"{self.base}/events", timeout=60) as r:
+				# no data for 30 s (three pings): the stream counts as dead and is opened again
+				with self.opener.open(f"{self.base}/events", timeout=30) as r:
 					event = None
 					data = []
 					for raw in r:
@@ -129,9 +147,12 @@ class Device:
 						elif line.startswith("data:"):
 							data.append(line[5:].strip())
 						elif line == "":
-							if last is not None:
-								print(f"{self.name}: connected", file=sys.stderr, flush=True)
+							now = time.time()
+							if last is not None or not self.online:
+								gap = f" after {duration(now - self.last_seen)} without sign of life" if self.last_seen else ""
+								print(f"{self.name}: connected{gap}", file=sys.stderr, flush=True)
 								last = None
+							self.last_seen = now
 							if event == "ping":
 								self.online = True
 							elif event == "state" and data:
@@ -170,7 +191,12 @@ class Device:
 	def snapshot(self):
 		with self.lock:
 			s = dict(self.state)
-		s.update(name=self.name, url=self.base + "/", online=self.online, has_power=self.power is not None)
+		now = time.time()
+		seen_ago = None if self.last_seen is None else now - self.last_seen
+		# online only with a recent sign of life, not just an open connection
+		online = self.online and seen_ago is not None and seen_ago < SIGN_OF_LIFE_S
+		s.update(name=self.name, url=self.base + "/", online=online, has_power=self.power is not None,
+				last_seen=self.last_seen, seen_ago=seen_ago)
 		return s
 
 
@@ -215,10 +241,27 @@ button:disabled { opacity: 0.4; cursor: default; }
 <script>
 const POWER_ICON = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M16.56,5.44L15.11,6.89C16.84,7.94 18,9.83 18,12A6,6 0 0,1 12,18A6,6 0 0,1 6,12C6,9.83 7.16,7.94 8.88,6.88L7.44,5.44C5.36,6.88 4,9.28 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12C20,9.28 18.64,6.88 16.56,5.44M13,3H11V13H13"/></svg>';
 let devices = [];
+let loadedAt = Date.now();  // when devices was fetched, for counting up seen_ago
 const MODES = { OFF: "Off", HEAT: "Heat", COOL: "Cool", HEAT_COOL: "Heat/Cool", AUTO: "Auto", DRY: "Dry",
 	FAN_ONLY: "Fan only" };
 // setpoint changed on the page, sent after a short pause so that several clicks make one request
 const pending = {};
+
+function durationText(s) {
+	s = Math.floor(s);
+	if (s < 60) return `${s} s`;
+	if (s < 3600) return `${Math.floor(s / 60)} min`;
+	if (s < 86400) return `${Math.floor(s / 3600)} h ${Math.floor(s % 3600 / 60)} min`;
+	return `${Math.floor(s / 86400)} d ${Math.floor(s % 86400 / 3600)} h`;
+}
+
+// time since the last sign of life of a module, counted up in the page between the updates
+function noSignText(d) {
+	if (d.last_seen === null || d.last_seen === undefined) return "no sign of life since the panel started";
+	const ago = d.seen_ago + (Date.now() - loadedAt) / 1000;
+	const since = new Date(d.last_seen * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+	return `no sign of life for ${durationText(ago)} (since ${since})`;
+}
 
 function num(v) {
 	const n = parseFloat(v);
@@ -251,7 +294,7 @@ function render() {
 		const mode = MODES[d.mode] || d.mode || "";
 		const info = card.querySelector(".info");
 		if (!d.online) {
-			info.textContent = "no connection";
+			info.textContent = noSignText(d);
 		} else {
 			info.innerHTML = "";
 			const m = document.createElement("span");
@@ -282,6 +325,7 @@ async function load() {
 	try {
 		const r = await fetch("api/state", { cache: "no-store" });
 		devices = await r.json();
+		loadedAt = Date.now();
 	} catch (e) {
 		devices = devices.map(d => Object.assign({}, d, { online: false }));
 	}
